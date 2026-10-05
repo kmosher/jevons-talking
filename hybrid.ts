@@ -16,7 +16,7 @@ const SALAD_DELETES = 0.25
 // A bare yes or no must rate at least this as a good answer to be kept, at either stage.
 const BARE_BAR = 0.6
 
-export type HybridOptions = { keyboardBy?: 'mode' | 'jev'; mode?: Mode; conversation?: Post[]; good?: number; log?: (line: string) => void }
+export type HybridOptions = { keyboard?: Keyboard; keyboardBy?: 'mode' | 'jev'; mode?: Mode; conversation?: Post[]; good?: number; log?: (line: string) => void }
 export type HybridTalk = BeamTalk & { path: 'single' | 'beam'; mode: Mode; keyboard: Keyboard }
 
 export async function hybrid(question: string, opts: HybridOptions = {}): Promise<HybridTalk> {
@@ -27,8 +27,9 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
   const classified = opts.mode ? null : await classify(question, conversation, keyboardBy === 'jev')
   const mode = opts.mode ?? classified!.mode
   // JEV_ROUTING=off keeps everything on the words keyboard.
-  const keyboard: Keyboard =
-    process.env.JEV_ROUTING === 'off'
+  const keyboard: Keyboard = opts.keyboard
+    ? opts.keyboard
+    : process.env.JEV_ROUTING === 'off'
       ? 'words'
       : keyboardBy === 'jev' && classified?.keyboard
         ? classified.keyboard
