@@ -129,12 +129,10 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   const letters = 'abcdefghijklmnopqrstuvwxyz0123456789'
   if (prefix && !isBlocked(prefix)) menu[`word: ${prefix}`] ??= `enter "${prefix}" as typed`
   for (const l of letters) menu[`letter: ${l}`] = `narrow predictions to words starting "${prefix + l}"`
-  // No punctuation straight after punctuation, so a blocked bare "no" can't stall on "no,.....".
+  // No punctuation straight after punctuation, so Jev can't stall on "no,.....".
   if (!prefix && !/^[.,?]$/.test(words.at(-1) ?? '')) for (const p of ['.', ',', '?']) menu[p] = `append "${p}"`
   if (prefix || words.length) menu.backspace = prefix ? `delete the typed letter "${prefix.at(-1)}"` : `delete "${words.at(-1)}"`
-  // A bare yes or no ("no", "no.", "no. no") can't be spoken: Jev has to say something more.
-  const bare = words.length > 0 && words.every((w) => /^(yes|no|[.,?])$/.test(w))
-  if (words.filter((w) => /\w/.test(w)).length >= o.minWordsToSpeak && !prefix && !bare) menu.SPEAK = 'finish and speak the text aloud'
+  if (words.filter((w) => /\w/.test(w)).length >= o.minWordsToSpeak && !prefix) menu.SPEAK = 'finish and speak the text aloud'
   for (const opt of b.rejected.get(branchKey(b)) ?? []) delete menu[opt]
   return menu
 }
@@ -203,6 +201,9 @@ export function save(t: Talk): string {
   writeFileSync(out, JSON.stringify(t, null, 2))
   return out
 }
+
+// A bare yes or no ("no", "no.", "no. no"): allowed, but it has to clear a higher bar to win.
+export const isBare = (text: string) => /^\s*((yes|no)[\s.,?!]*)+$/i.test(text)
 
 export const meanConfidence = (t: Talk) => t.steps.reduce((x, s) => x + s.confidence, 0) / (t.steps.length || 1)
 

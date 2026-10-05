@@ -5,11 +5,13 @@
 //
 // Usage: npm run -s talk:hybrid -- [--q="..."] [--good=0.35]
 import { type BeamTalk, beam, rateDrafts } from './beam.ts'
-import { type Post, save, talk } from './talk.ts'
+import { isBare, type Post, save, talk } from './talk.ts'
 
 const SINGLE_STEPS = 40
 // The single path's answer is kept if it rates at least this; otherwise the beam runs.
 const HAND_OFF = 0.35
+// A bare yes or no must rate at least this as a good answer to be kept, at either stage.
+const BARE_BAR = 0.6
 
 export type HybridOptions = { conversation?: Post[]; good?: number; log?: (line: string) => void }
 export type HybridTalk = BeamTalk & { path: 'single' | 'beam' }
@@ -29,7 +31,7 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
     calls: singleCalls,
     path: 'single',
   }
-  if (rating >= good) return asSingle
+  if (rating >= (isBare(single.answer) ? BARE_BAR : good)) return asSingle
 
   const b = await beam(question, { conversation, seed: [single.answer], log })
   // The final pick is a fresh rating of the single answer and the beam's best drafts.
@@ -41,7 +43,10 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
   const finalists = [...new Set([single.answer, ...beamBest])].filter(Boolean)
   const fresh = await rateDrafts(question, finalists, conversation)
   const judged = Object.fromEntries(finalists.map((d, i) => [d, fresh[i]]))
-  const best = finalists[fresh.indexOf(Math.max(...fresh))]
+  // Bare yes/no candidates under BARE_BAR are out, unless nothing else is left.
+  const eligible = fresh.map((r, i) => (isBare(finalists[i]) && r < BARE_BAR ? -1 : r))
+  const scores = eligible.some((r) => r >= 0) ? eligible : fresh
+  const best = finalists[scores.indexOf(Math.max(...scores))]
   log(`final pick: "${best}" (${finalists.map((d, i) => `"${d}" ${(fresh[i] * 100).toFixed(0)}%`).join(', ')})`)
   const calls = singleCalls + b.calls + 1
   if (best === single.answer) return { ...asSingle, judged, calls }

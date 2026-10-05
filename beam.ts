@@ -20,6 +20,7 @@ import {
   jev,
   menuFor,
   newBranch,
+  isBare,
   type Post,
   type Step,
   recentActions,
@@ -130,7 +131,8 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
     return r.answers
   }
   const unrated = () => [...seed, ...distinct(finished).map(branchText)].filter((d, i, all) => d && all.indexOf(d) === i && !ratings.has(d))
-  const bestRated = () => Math.max(0, ...ratings.values())
+  // Bare yes/no drafts never end the search early: they win only at the final pick, if at all.
+  const bestRated = () => Math.max(0, ...[...ratings].filter(([d]) => !isBare(d)).map(([, r]) => r))
 
   for (let step = 0; step < maxSteps && live.length; step++) {
     const ids = live.map((_, i) => `b${i}`)
