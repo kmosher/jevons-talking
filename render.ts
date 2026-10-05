@@ -6,6 +6,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { Resvg } from '@resvg/resvg-js'
 import type { BeamTalk } from './beam.ts'
+import type { HybridTalk } from './hybrid.ts'
 import { meanConfidence, type Step, type Talk } from './talk.ts'
 
 const W = 1080
@@ -117,6 +118,26 @@ export function renderSvg(t: Talk, { full = false } = {}): string {
   parts.push(`<text x="${PAD}" y="${top + 88}" font-family="${SANS}" font-size="14" fill="${C.muted}">${esc(meta)}</text>`)
 
   let y = top + 112
+  // The decisions made before writing: reply mode, how much context was kept, what images it
+  // "saw", and the path. With full, the dropped posts and complete image descriptions too.
+  const d = (t as Partial<HybridTalk>).decisions
+  if (d) {
+    const path = (t as Partial<HybridTalk>).path
+    const bits = [
+      `mode: ${d.mode}${d.modeConfidence !== undefined ? ` ${Math.round(d.modeConfidence * 100)}%` : ''}`,
+      ...(d.contextTotal ? [`context: kept ${d.contextKept} of ${d.contextTotal} posts`] : []),
+      ...d.images.map((img) => `saw: "${clip(img, full ? 200 : 60)}"`),
+      ...(path ? [`path: ${path === 'beam' ? `beam → ${Object.keys((t as Partial<HybridTalk>).judged ?? {}).length} drafts` : 'single draft'}`] : []),
+    ]
+    parts.push(`<text x="${PAD}" y="${y - 2}" font-family="${SANS}" font-size="14" fill="${C.ink}">${esc(bits.join('  ·  '))}</text>`)
+    y += 26
+    if (full)
+      for (const p of d.dropped) {
+        parts.push(`<text x="${PAD}" y="${y - 2}" font-family="${SANS}" font-size="13" fill="${C.muted}">${esc(`dropped: ${p.author}: "${clip(p.text.replace(/\s+/g, ' '), 110)}"`)}</text>`)
+        y += 20
+      }
+    y += 6
+  }
   // When there was more than one candidate: each, and how Jev rated it as a final answer.
   const judged = (t as Partial<BeamTalk>).judged
   if (judged && Object.keys(judged).length > 1) {

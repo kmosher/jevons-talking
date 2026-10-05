@@ -17,16 +17,20 @@ const SALAD_DELETES = 0.25
 const BARE_BAR = 0.6
 
 export type HybridOptions = { keyboard?: Keyboard; keyboardBy?: 'mode' | 'jev'; mode?: Mode; conversation?: Post[]; good?: number; log?: (line: string) => void }
-export type HybridTalk = BeamTalk & { path: 'single' | 'beam'; mode: Mode; keyboard: Keyboard }
+// What was decided before writing started, for the trace image.
+export type Decisions = { mode: Mode; modeConfidence?: number; contextTotal: number; contextKept: number; dropped: Post[]; images: string[] }
+export type HybridTalk = BeamTalk & { path: 'single' | 'beam'; mode: Mode; keyboard: Keyboard; decisions: Decisions }
 
 export async function hybrid(question: string, opts: HybridOptions = {}): Promise<HybridTalk> {
   const { good = HAND_OFF, log = () => {} } = opts
   // Thread posts Jev rates irrelevant to the latest message are dropped first (JEV_RELEVANCE=off keeps all).
   let conversation = opts.conversation
   let filterCalls = 0
+  let droppedPosts: Post[] = []
   if (conversation && conversation.length > 3 && process.env.JEV_RELEVANCE !== 'off') {
     const { kept, dropped } = await relevantContext(conversation)
     filterCalls = 1
+    droppedPosts = dropped
     conversation = kept
     if (dropped.length) log(`dropped context: ${dropped.map((p) => `${p.author}: "${p.text.slice(0, 50)}"`).join(' | ')}`)
   }
@@ -71,7 +75,17 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
   const singleCalls =
     drafts.reduce((n, d) => n + d.t.steps.length + d.t.steps.filter((s) => s.final !== undefined).length, 0) + drafts.length + (classified ? 1 : 0) + filterCalls
   log(`single path: "${single.answer}" (${chosenKeyboard}) rated ${(rating * 100).toFixed(0)}% in ${singleCalls} calls`)
+  // The question itself is the last conversation entry, so it isn't counted as context.
+  const decisions: Decisions = {
+    mode,
+    modeConfidence: classified?.confidence,
+    contextTotal: Math.max(0, (opts.conversation?.length ?? 1) - 1),
+    contextKept: Math.max(0, (conversation?.length ?? 1) - 1),
+    dropped: droppedPosts,
+    images: (conversation ?? []).flatMap((p) => [...p.text.matchAll(/\[image: ([^\]]+)\]/g)].map((m) => m[1])),
+  }
   const asSingle: HybridTalk = {
+    decisions,
     ...single,
     drafts: drafts.map((d, i) => ({ answer: d.t.answer, score: ratings[i], picks: d.t.steps.length })),
     judged: Object.fromEntries(drafts.map((d, i) => [d.t.answer, ratings[i]])),
@@ -109,7 +123,7 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
   if (fromSingle >= 0) return { ...asSingle, ...drafts[fromSingle].t, keyboard: drafts[fromSingle].keyboard, judged, calls }
   // The beam's answer may be a draft other than its own pick; use that draft's path for the trace.
   const steps = b.answer === best ? b.steps : (b.draftSteps?.[best] ?? b.steps)
-  return { ...b, answer: best, steps, judged, calls, path: 'beam', mode, keyboard: chosenKeyboard }
+  return { ...b, answer: best, steps, judged, calls, path: 'beam', mode, keyboard: chosenKeyboard, decisions }
 }
 
 if (import.meta.main) {
