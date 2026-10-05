@@ -11,7 +11,7 @@ const PAD = 40
 const ROW = 36
 const MAX_ROWS = 60
 const ALTERNATIVES = 4
-const C = { bg: '#f7f4ee', ink: '#1f3a5f', muted: '#8a94a3', orange: '#e8743b', chip: '#e3e6ea', line: '#e2ddd2', red: '#c2453d' }
+const C = { bg: '#f7f4ee', ink: '#1f3a5f', muted: '#8a94a3', orange: '#e8743b', chip: '#dce1e8', line: '#e2ddd2', red: '#c2453d' }
 const SANS = "'Helvetica Neue', Helvetica, Arial, sans-serif"
 const SERIF = "Georgia, 'Times New Roman', serif"
 const MONO = 'Menlo, Monaco, monospace'
@@ -49,7 +49,7 @@ function chip(x: number, y: number, text: string, opts: { fill: string; ink: str
   return {
     w,
     svg: `<g opacity="${opts.opacity ?? 1}"><rect x="${x}" y="${y}" width="${w}" height="26" rx="7" fill="${opts.fill}"${stroke}/>` +
-      `<text x="${x + 9}" y="${y + 18}" font-family="${opts.family ?? SANS}" font-size="${size}" font-weight="${opts.bold ? 700 : 400}" fill="${opts.ink}">${esc(text)}</text></g>`,
+      `<text x="${x + w / 2}" y="${y + 18}" font-family="${opts.family ?? SANS}" font-size="${size}" font-weight="${opts.bold ? 700 : 400}" fill="${opts.ink}" text-anchor="middle">${esc(text)}</text></g>`,
   }
 }
 
@@ -77,7 +77,7 @@ function row(step: Step, i: number, after: { text: string; prefix: string }, y: 
     .sort((a, b) => b[1] - a[1])
     .slice(0, ALTERNATIVES)
   for (const [option, p] of alts) {
-    const c = chip(x, y, `${clip(label(option), 12)} ${Math.round(p * 100)}%`, { fill: C.chip, ink: C.ink, size: 13, opacity: 0.2 + 0.8 * Math.sqrt(p) })
+    const c = chip(x, y, `${clip(label(option), 12)} ${Math.round(p * 100)}%`, { fill: C.chip, ink: C.ink, size: 13, opacity: 0.45 + 0.55 * Math.min(1, p / 0.2) })
     if (x + c.w > W - PAD - 300) break
     parts.push(c.svg)
     x += c.w + 6
@@ -127,7 +127,7 @@ export function renderSvg(t: Talk): string {
     const ink = { word: '#fff', letter: C.orange, backspace: C.red, speak: '#fff' }[k]
     const stroke = k === 'letter' ? C.orange : k === 'backspace' ? C.red : fill
     strip.push(`<rect x="${x}" y="${y}" width="${w}" height="21" rx="5" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`)
-    strip.push(`<text x="${x + 6}" y="${y + 15}" font-family="${k === 'letter' ? MONO : SANS}" font-size="14" font-weight="700" fill="${ink}">${esc(text)}</text>`)
+    strip.push(`<text x="${x + w / 2}" y="${y + 15}" font-family="${k === 'letter' ? MONO : SANS}" font-size="14" font-weight="700" fill="${ink}" text-anchor="middle">${esc(text)}</text>`)
     x += w + 4
   }
   parts.push(...strip)
