@@ -5,6 +5,7 @@
 //
 // Usage: npm run -s talk:hybrid -- [--q="..."] [--good=0.35]
 import { type BeamTalk, beam, rateDrafts } from './beam.ts'
+import { type Rewrite, rewrite } from './rewrite.ts'
 import { classify, isBare, unfamiliarWords, usefulWords, verdict, relevantContext, type Keyboard, type Mode, type Post, save, talk } from './talk.ts'
 
 const SINGLE_STEPS = 40
@@ -19,9 +20,23 @@ const BARE_BAR = 0.6
 export type HybridOptions = { keyboard?: Keyboard; keyboardBy?: 'mode' | 'jev'; mode?: Mode; conversation?: Post[]; good?: number; log?: (line: string) => void }
 // What was decided before writing started, for the trace image.
 export type Decisions = { mode: Mode; modeConfidence?: number; verdict?: { yes: number; word: string }; contextWords?: { word: string; p: number }[]; contextTotal: number; contextKept: number; dropped: Post[]; images: string[] }
-export type HybridTalk = BeamTalk & { path: 'single' | 'beam'; mode: Mode; keyboard: Keyboard; decisions: Decisions }
+export type HybridTalk = BeamTalk & { rewrite?: Rewrite; path: 'single' | 'beam'; mode: Mode; keyboard: Keyboard; decisions: Decisions }
 
 export async function hybrid(question: string, opts: HybridOptions = {}): Promise<HybridTalk> {
+  const t = await compose(question, opts)
+  if (process.env.JEV_REWRITE !== 'on' || !t.answer) return t
+  const rw = await rewrite(question, t.answer, {
+    conversation: opts.conversation,
+    mode: t.mode,
+    extraWords: (t.decisions.contextWords ?? []).filter((w) => w.p >= 0.5).map((w) => w.word),
+    locked: t.decisions.verdict ? 1 : 0,
+    log: opts.log,
+  })
+  if (!rw) return t
+  return { ...t, rewrite: rw, answer: rw.kept === 'after' ? rw.after : t.answer, calls: t.calls + rw.calls }
+}
+
+async function compose(question: string, opts: HybridOptions = {}): Promise<HybridTalk> {
   const { good = HAND_OFF, log = () => {} } = opts
   // Thread posts Jev rates irrelevant to the latest message are dropped first (JEV_RELEVANCE=off keeps all).
   let conversation = opts.conversation

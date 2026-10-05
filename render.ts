@@ -123,6 +123,7 @@ export function renderSvg(t: Talk, { full = false } = {}): string {
       ...(d.contextWords?.some((w) => w.p >= 0.5) ? [`new words: ${d.contextWords.filter((w) => w.p >= 0.5).map((w) => w.word).join(', ')}`] : []),
       ...(d.contextTotal ? [`context: kept ${d.contextKept} of ${d.contextTotal} posts`] : []),
       ...d.images.map((img) => `saw: "${clip(img, full ? 200 : 60)}"`),
+      ...((t as Partial<HybridTalk>).rewrite?.kept === 'after' ? [`rewrote: ${(t as HybridTalk).rewrite!.edits.map((e) => `${e.from} → ${e.to || '∅'}`).join(', ')}`] : []),
       ...(path ? [`path: ${path === 'beam' ? `beam → ${Object.keys((t as Partial<HybridTalk>).judged ?? {}).length} drafts` : 'single draft'}`] : []),
     ]
     parts.push(`<text x="${PAD}" y="${y - 2}" font-family="${SANS}" font-size="14" fill="${C.ink}">${esc(bits.join('  ·  '))}</text>`)

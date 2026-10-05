@@ -157,7 +157,26 @@ const PAIRS: string[] = (() => {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, Number(process.env.JEV_PAIRS ?? 40)).map(([p]) => p)
 })()
 
-function predict(prev: string, prefix: string, n: number, common: number, keyboard: Keyboard = DEFAULT_KEYBOARD): string[] {
+// Words that fit between prev and next: scored by how often they follow prev and precede next,
+// so a replacement suits both neighbours. Falls back to the plain prediction after prev.
+let preceders: Map<string, Map<string, number>> | undefined
+export function fillers(prev: string, next: string | undefined, n: number): string[] {
+  if (!preceders) {
+    preceders = new Map()
+    for (const [a, follows] of bigram) for (const [b, c] of follows) {
+      const m = preceders.get(b) ?? preceders.set(b, new Map()).get(b)!
+      m.set(a, c)
+    }
+  }
+  const after = bigram.get(prev) ?? new Map<string, number>()
+  const before = next ? (preceders.get(next) ?? new Map<string, number>()) : new Map<string, number>()
+  const score = new Map<string, number>()
+  for (const [w, c] of after) score.set(w, Math.log1p(c) + (before.has(w) ? Math.log1p(before.get(w)!) + 2 : 0))
+  for (const [w, c] of before) if (!score.has(w)) score.set(w, Math.log1p(c))
+  return [...score].sort((a, b) => b[1] - a[1]).map(([w]) => w).filter((w) => !isBlocked(w)).slice(0, n)
+}
+
+export function predict(prev: string, prefix: string, n: number, common: number, keyboard: Keyboard = DEFAULT_KEYBOARD): string[] {
   if (keyboard === 'letters') return prefix ? byFrequency.filter((w) => w.startsWith(prefix)).slice(0, n) : []
   const out = new Set<string>()
   const follow = [...((keyboard === 'chat' ? chatBigram : bigram).get(prev)?.entries() ?? [])].sort((a, b) => b[1] - a[1]).map(([w]) => w)
