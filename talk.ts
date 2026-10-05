@@ -2,7 +2,8 @@
 // each step offers predicted next words alongside letters that narrow
 // the predictions, plus punctuation, backspace and SPEAK. Jev picks one option per call.
 //
-// Word prediction is a bigram model over WordNet glosses and their example sentences,
+// Word prediction is a bigram model over WordNet glosses and their example sentences, plus
+// the conversational phrases in conversation.txt,
 // with some slots reserved for the most common words so a function word like "is"
 // is always on offer even after a word with many followers. Words in blocklist.txt
 // are never offered and can't be entered by spelling them out.
@@ -39,29 +40,41 @@ const DICT: string = createRequire(import.meta.url)('wordnet-db').path
 const unigram = new Map<string, number>()
 const bigram = new Map<string, Map<string, number>>()
 const START = '<s>'
+function count(sentence: string, weight = 1) {
+  const words = sentence.match(/[a-z]+(?:'[a-z]+)?/g)?.filter((w) => !isBlocked(w))
+  if (!words) return
+  let prev = START
+  for (const w of words) {
+    unigram.set(w, (unigram.get(w) ?? 0) + weight)
+    const m = bigram.get(prev) ?? new Map<string, number>()
+    m.set(w, (m.get(w) ?? 0) + weight)
+    bigram.set(prev, m)
+    prev = w
+  }
+}
 for (const pos of ['noun', 'verb', 'adj', 'adv']) {
   for (const line of readFileSync(join(DICT, `data.${pos}`), 'utf8').split('\n')) {
     const gloss = line.split(' | ')[1]
     if (!gloss) continue
-    for (const sentence of gloss.toLowerCase().split(/[;"]/)) {
-      const words = sentence.match(/[a-z]+(?:'[a-z]+)?/g)?.filter((w) => !isBlocked(w))
-      if (!words) continue
-      let prev = START
-      for (const w of words) {
-        unigram.set(w, (unigram.get(w) ?? 0) + 1)
-        const m = bigram.get(prev) ?? new Map<string, number>()
-        m.set(w, (m.get(w) ?? 0) + 1)
-        bigram.set(prev, m)
-        prev = w
-      }
-    }
+    for (const sentence of gloss.toLowerCase().split(/[;"]/)) count(sentence)
   }
+}
+// A small hand-written list of conversational phrases, weighted so that "thanks", "lol" or
+// "fair enough" can compete with dictionary prose in the predictions.
+const CONVERSATION_WEIGHT = 500
+for (const line of readFileSync(new URL('conversation.txt', import.meta.url), 'utf8').split('\n')) {
+  if (line.trim() && !line.startsWith('#')) count(line.toLowerCase(), CONVERSATION_WEIGHT)
 }
 const byFrequency = [...unigram.entries()].sort((a, b) => b[1] - a[1]).map(([w]) => w)
 
 // The `common` most frequent words matching the typed prefix, then bigram
 // continuations of `prev`, then unigram backoff to fill `n` slots.
+// JEV_PREDICTOR=completion turns prediction off until Jev types a letter, then offers only the
+// most frequent words starting with what it typed: a plain keyboard with completions.
+const COMPLETION_ONLY = process.env.JEV_PREDICTOR === 'completion'
+
 function predict(prev: string, prefix: string, n: number, common: number): string[] {
+  if (COMPLETION_ONLY) return prefix ? byFrequency.filter((w) => w.startsWith(prefix)).slice(0, n) : []
   const out = new Set<string>()
   const follow = [...(bigram.get(prev)?.entries() ?? [])].sort((a, b) => b[1] - a[1]).map(([w]) => w)
   const take = (source: string[], limit: number) => {

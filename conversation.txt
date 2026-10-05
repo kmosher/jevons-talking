@@ -1,0 +1,125 @@
+# Everyday conversational phrases, one per line, counted into the bigram predictor alongside
+# WordNet's glosses (which never say "thanks" or "lol"). Each line is weighted by CONVERSATION_WEIGHT.
+thanks
+thanks so much
+thank you
+thank you so much
+thank you for asking
+you are welcome
+you're welcome
+no problem
+my pleasure
+glad you liked it
+glad to help
+happy to help
+hi
+hello
+hello there
+hey
+good morning
+good night
+goodbye
+bye
+see you later
+see you around
+nice to meet you
+how are you
+i am fine
+i am good
+i am doing well
+not bad
+pretty good
+lol
+haha
+ha
+that is funny
+that is so funny
+very funny
+nice
+nice one
+cool
+wow
+oh no
+oh well
+oops
+yikes
+yay
+fair
+fair enough
+fair point
+good point
+great point
+well said
+true
+so true
+that is true
+exactly
+absolutely
+of course
+sure
+yes please
+no thanks
+maybe
+probably
+i think so
+i don't think so
+i don't know
+i have no idea
+who knows
+i agree
+i disagree
+me too
+same here
+you too
+you as well
+me neither
+i guess
+i suppose
+not really
+kind of
+sort of
+it depends
+good question
+great question
+tough question
+interesting
+how interesting
+tell me more
+i see
+makes sense
+that makes sense
+got it
+i get it
+my bad
+sorry
+i am sorry
+no worries
+all good
+it is fine
+never mind
+wait what
+what do you mean
+are you sure
+really
+seriously
+no way
+you got me
+well played
+i love it
+i like it
+i hate it
+that is great
+that is awesome
+that is wild
+that is weird
+that is beautiful
+that is sad
+too bad
+good luck
+congratulations
+cheers
+thanks for the kind words
+you are too kind
+you flatter me
+i try my best
+i do what i can
