@@ -10,7 +10,7 @@ import { classify, isBare, type Keyboard, type Mode, type Post, save, talk } fro
 const SINGLE_STEPS = 40
 // The single path's answer is kept if it rates at least this; otherwise the beam runs.
 const HAND_OFF = 0.35
-// The salad guard: below this rating, or above this share of deletes, try the other keyboard.
+// The salad guard (JEV_SALAD_GUARD=on): below this rating, or above this share of deletes, try the other keyboard.
 const SALAD_RATING = 0.3
 const SALAD_DELETES = 0.25
 // A bare yes or no must rate at least this as a good answer to be kept, at either stage.
@@ -22,7 +22,7 @@ export type HybridTalk = BeamTalk & { path: 'single' | 'beam'; mode: Mode; keybo
 export async function hybrid(question: string, opts: HybridOptions = {}): Promise<HybridTalk> {
   const { conversation, good = HAND_OFF, log = () => {} } = opts
   // First, what kind of reply the message calls for and which keyboard to write it with: by
-  // mode (acknowledgements and comebacks on the plain keyboard), or Jev's own choice.
+  // mode (acknowledgements and comebacks on the chat keyboard), or Jev's own choice.
   const keyboardBy = opts.keyboardBy ?? (process.env.JEV_KEYBOARD_BY === 'jev' ? 'jev' : 'mode')
   const classified = opts.mode ? null : await classify(question, conversation, keyboardBy === 'jev')
   const mode = opts.mode ?? classified!.mode
@@ -33,7 +33,7 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
       : keyboardBy === 'jev' && classified?.keyboard
         ? classified.keyboard
         : mode === 'acknowledge' || mode === 'comeback'
-          ? 'letters'
+          ? 'chat'
           : 'words'
   log(
     `mode: ${mode}${classified ? ` (${(classified.confidence * 100).toFixed(0)}%)` : ''}, keyboard: ${keyboard}` +
@@ -46,8 +46,8 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
   // Salad guard: a draft the judge rates poorly, or one that spent a quarter of its picks
   // deleting, gets a second draft on the other keyboard, and the better one goes forward.
   const deletes = drafts[0].t.steps.filter((s) => s.pick === 'backspace').length / (drafts[0].t.steps.length || 1)
-  if (process.env.JEV_SALAD_GUARD !== 'off' && (ratings[0] < SALAD_RATING || deletes > SALAD_DELETES)) {
-    const other: Keyboard = keyboard === 'words' ? 'letters' : 'words'
+  if (process.env.JEV_SALAD_GUARD === 'on' && (ratings[0] < SALAD_RATING || deletes > SALAD_DELETES)) {
+    const other: Keyboard = keyboard === 'letters' ? 'words' : 'letters'
     log(`salad guard: "${drafts[0].t.answer}" rated ${(ratings[0] * 100).toFixed(0)}%, ${(deletes * 100).toFixed(0)}% deletes; trying ${other}`)
     drafts.push({ keyboard: other, t: await write(other) })
     ratings = await rateDrafts(question, drafts.map((d) => d.t.answer || '…'), conversation, mode)
@@ -69,9 +69,10 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
     mode,
     keyboard: chosenKeyboard,
   }
-  // With JEV_EXPLORE=1, a reply of two words or fewer goes to the beam even when it rated well,
-  // so the search can get past a first word that SPEAK made too easy to stop at.
-  const explore = process.env.JEV_EXPLORE === '1' && single.answer.split(/\s+/).filter((w) => /\w/.test(w)).length <= 2
+  // An acknowledgement or comeback of two words or fewer goes to the beam even when it rated
+  // well, so the search can get past a first word that SPEAK made too easy to stop at
+  // (JEV_EXPLORE=off disables this).
+  const explore = process.env.JEV_EXPLORE !== 'off' && (mode === 'acknowledge' || mode === 'comeback') && single.answer.split(/\s+/).filter((w) => /\w/.test(w)).length <= 2
   if (!explore && rating >= (isBare(single.answer) ? BARE_BAR : good)) return asSingle
   if (explore) log(`exploring past "${single.answer}"`)
 

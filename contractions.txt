@@ -1,0 +1,67 @@
+# Contractions in context, counted into every word-pair table: WordNet's definitions almost never
+# use them, and Norvig's web counts split them at the apostrophe. Each line is weighted by
+# CONTRACTION_WEIGHT.
+i'm fine
+i'm not
+i'm sure
+i'm sorry
+i'm glad
+i'm afraid
+i'm not sure
+i'm just a
+you're welcome
+you're right
+you're wrong
+you're too kind
+you're not wrong
+it's true
+it's not
+it's a
+it's fine
+it's just
+it's actually
+it's called
+it's like
+that's true
+that's funny
+that's right
+that's not
+that's a
+that's what
+that's why
+that's all
+there's no
+there's a
+here's the
+what's the
+what's that
+who's asking
+let's see
+let's go
+don't know
+don't think
+don't worry
+don't care
+doesn't matter
+doesn't mean
+didn't know
+can't say
+can't be
+won't be
+wouldn't know
+isn't it
+isn't a
+aren't you
+wasn't me
+haven't heard
+i've been
+i've never
+i'd say
+i'd rather
+i'll be
+i'll try
+you'll see
+we're all
+they're not
+he's right
+she's right

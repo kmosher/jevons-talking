@@ -16,10 +16,11 @@
 //
 // Usage: npm run talk -- [--q="What is a black hole?"] [--max-steps=100] [--words=150] [--common=30] [--dry-run]
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { gunzipSync } from 'node:zlib'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { choice, noul, TypeSafeClient } from '@typesafe-ai/sdk'
 import { chunkOf, dasherMenu } from './dasher.ts'
 
@@ -70,23 +71,40 @@ if (process.env.JEV_CHAT_WORDS === '1')
   for (const line of readFileSync(new URL('conversation.txt', import.meta.url), 'utf8').split('\n')) {
     if (line.trim() && !line.startsWith('#')) count(line.toLowerCase(), CONVERSATION_WEIGHT)
   }
-// JEV_NORVIG_PAIRS=<path to Peter Norvig's count_2w.txt> blends web-scale word-pair counts into
-// the bigram model, scaled so its biggest pair matches WordNet's biggest.
-if (process.env.JEV_NORVIG_PAIRS) {
+// Contractions in context go into every word-pair table (see contractions.txt).
+const CONTRACTION_WEIGHT = 200
+if (process.env.JEV_CONTRACTIONS !== 'off')
+  for (const line of readFileSync(new URL('contractions.txt', import.meta.url), 'utf8').split('\n')) {
+    if (line.trim() && !line.startsWith('#')) count(line.toLowerCase(), CONTRACTION_WEIGHT)
+  }
+
+// The "chat" table adds Peter Norvig's web-scale word-pair counts (count_2w.txt, from Google's
+// Web 1T corpus; downloaded once to ~/.cache/jevons-talking, or JEV_NORVIG_PAIRS), scaled so its
+// biggest pair matches WordNet's biggest. JEV_NORVIG=off leaves it the same as the base table.
+const chatBigram = new Map<string, Map<string, number>>([...bigram].map(([k, m]) => [k, new Map(m)]))
+const NORVIG_URL = 'https://norvig.com/ngrams/count_2w.txt'
+const norvigPath = process.env.JEV_NORVIG_PAIRS ?? join(homedir(), '.cache', 'jevons-talking', 'count_2w.txt')
+if (process.env.JEV_NORVIG !== 'off') {
+  if (!existsSync(norvigPath)) {
+    mkdirSync(dirname(norvigPath), { recursive: true })
+    writeFileSync(norvigPath, await (await fetch(NORVIG_URL)).text())
+  }
   let maxWordNet = 0
   for (const m of bigram.values()) for (const n of m.values()) if (n > maxWordNet) maxWordNet = n
   const pairs: [string, string, number][] = []
-  for (const line of readFileSync(process.env.JEV_NORVIG_PAIRS, 'utf8').split('\n')) {
+  for (const line of readFileSync(norvigPath, 'utf8').split('\n')) {
     const [both, n] = line.split('\t')
     const [a, b] = (both ?? '').toLowerCase().split(' ')
-    if (!b || !/^[a-z]+(?:'[a-z]+)?$/.test(a) || !/^[a-z]+(?:'[a-z]+)?$/.test(b) || isBlocked(a) || isBlocked(b)) continue
+    if (!b || !/^[a-z]+$/.test(a) || !/^[a-z]+$/.test(b) || isBlocked(a) || isBlocked(b)) continue
+    // Norvig splits contractions at the apostrophe ("don t"); those fragments are dropped.
+    if (/^(t|s|re|ll|ve|m|d)$/.test(b) || /^(t|s|re|ll|ve|m|d)$/.test(a)) continue
     pairs.push([a, b, Number(n)])
   }
   const scale = maxWordNet / pairs.reduce((max, p) => Math.max(max, p[2]), 0)
   for (const [a, b, n] of pairs) {
-    const m = bigram.get(a) ?? new Map<string, number>()
+    const m = chatBigram.get(a) ?? new Map<string, number>()
     m.set(b, (m.get(b) ?? 0) + n * scale)
-    bigram.set(a, m)
+    chatBigram.set(a, m)
   }
 }
 
@@ -112,10 +130,22 @@ const byFrequency =
 // Two keyboards. "words": predicted next words from the bigram model, plus letters to narrow
 // them. "letters": no predictions until Jev types something, then the most frequent words
 // starting with it; two-letter keys for common letter pairs speed up the typing.
-export type Keyboard = 'words' | 'letters'
+export type Keyboard = 'words' | 'chat' | 'letters'
+// What Jev is told about each keyboard when it chooses one; written to be neutral, so none sounds
+// more like "really you" than the others.
 export const KEYBOARDS: Record<Keyboard, string> = {
-  words: 'a predictive keyboard: offers likely next words from dictionary definitions, fast and fluent but drifts toward stock phrasing',
-  letters: 'a plain keyboard: you type letters (or common letter pairs) and it completes the word, slower but every word is your own',
+  words:
+    'Dictionary keyboard. It predicts your next word from word pairs in dictionary definitions, so it is good at ' +
+    'definitional, factual sentences ("a black hole is a region of space…") and quick to write with. Its phrasing ' +
+    'is formal and it rarely offers casual or conversational words.',
+  chat:
+    'Conversational keyboard. It predicts your next word from word pairs in everyday web text as well as dictionary ' +
+    'definitions, so casual replies ("you too", "fair enough") are easy to reach. It can drift into loose or ' +
+    'ungrammatical phrasing on factual questions.',
+  letters:
+    'Spelling keyboard. It predicts nothing until you type: you type letters or common letter pairs and pick from ' +
+    'words that start with what you typed. Each word takes a few more picks, so replies tend to be short and ' +
+    'telegraphic, but any word you can spell is available.',
 }
 const DEFAULT_KEYBOARD: Keyboard = process.env.JEV_PREDICTOR === 'completion' ? 'letters' : 'words'
 // JEV_PREDICTOR=dasher swaps the whole keyboard for the Dasher-style character model in dasher.ts.
@@ -130,7 +160,7 @@ const PAIRS: string[] = (() => {
 function predict(prev: string, prefix: string, n: number, common: number, keyboard: Keyboard = DEFAULT_KEYBOARD): string[] {
   if (keyboard === 'letters') return prefix ? byFrequency.filter((w) => w.startsWith(prefix)).slice(0, n) : []
   const out = new Set<string>()
-  const follow = [...(bigram.get(prev)?.entries() ?? [])].sort((a, b) => b[1] - a[1]).map(([w]) => w)
+  const follow = [...((keyboard === 'chat' ? chatBigram : bigram).get(prev)?.entries() ?? [])].sort((a, b) => b[1] - a[1]).map(([w]) => w)
   const take = (source: string[], limit: number) => {
     for (const w of source) {
       if (out.size >= limit) break
@@ -144,7 +174,7 @@ function predict(prev: string, prefix: string, n: number, common: number, keyboa
 }
 
 // --- Menu loop ---------------------------------------------------------------
-export const instructions = `You are composing a spoken answer to a question using an assistive
+export const instructions = `${process.env.JEV_NAME === 'off' ? '' : 'You are Jev, called JT on Bluesky. '}You are composing a spoken answer to a question using an assistive
 communication menu. You cannot type freely: each turn you pick exactly one
 menu option. Options are:
 - "word: X" — append the predicted word X to your sentence.
@@ -200,7 +230,7 @@ export async function classify(
   chooseKeyboard = false,
 ): Promise<{ mode: Mode; confidence: number; keyboard?: Keyboard; keyboardConfidence?: number }> {
   const r = await jev().systemOne({
-    state: { ...(conversation?.length ? { conversation_so_far: conversation } : {}), message: question },
+    state: { you: 'Jev, called JT on Bluesky', ...(conversation?.length ? { conversation_so_far: conversation } : {}), message: question },
     questions: {
       mode: choice(
         'What kind of reply does the message call for?',
