@@ -27,7 +27,7 @@ import { chunkOf, dasherMenu } from './dasher.ts'
 export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number }
 export type Talk = { question: string; answer: string; finished: boolean; steps: Step[] }
 export type Post = { author: string; text: string }
-type Options = { keyboard?: Keyboard; mode?: Mode; phrases?: number; conversation?: Post[]; extraInstructions?: string; minWordsToSpeak?: number; confirmSpeak?: boolean; maxRejections?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
+type Options = { keyboard?: Keyboard; mode?: Mode; phrases?: number; conversation?: Post[]; extraInstructions?: string; prefill?: string[]; minWordsToSpeak?: number; confirmSpeak?: boolean; maxRejections?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
 
 // --- Blocklist ---------------------------------------------------------------
 const blocked = new Set(
@@ -209,6 +209,11 @@ export const MODES = {
     instruction: 'React to what was shared with a short, opinionated sentence, then pick SPEAK.',
     judge: 'a good reaction to what was shared',
   },
+  yesno: {
+    when: 'it is a yes-or-no question',
+    instruction: 'Your verdict on the yes-or-no question is already typed. Justify it in a few words, then pick SPEAK.',
+    judge: 'a good answer to the yes-or-no question, with a reason',
+  },
   acknowledge: {
     when: 'it is thanks, praise, a greeting or a goodbye',
     instruction: 'Reply graciously in a few words, then pick SPEAK.',
@@ -317,7 +322,7 @@ const PUNCTUATION = [...'.,?!:;\'"-–—…()[]{}/\\&*@#$%^+=_~<>|`']
 
 export type MenuOptions = { words: number; common: number; minWordsToSpeak: number; phrases?: number; keyboard?: Keyboard }
 
-export const newBranch = (): Branch => ({ words: [], prefix: '', undo: [], rejected: new Map(), steps: [], rejections: 0, score: 1 })
+export const newBranch = (words: string[] = []): Branch => ({ words: [...words], prefix: '', undo: [], rejected: new Map(), steps: [], rejections: 0, score: 1 })
 export const cloneBranch = (b: Branch): Branch => ({
   ...b,
   words: [...b.words],
@@ -416,12 +421,12 @@ export const recentActions = (b: Branch) => {
 }
 
 export async function talk(question: string, opts: Options = {}): Promise<Talk> {
-  const { keyboard = DEFAULT_KEYBOARD, mode = 'answer', phrases = 0, conversation, extraInstructions, minWordsToSpeak = 1, confirmSpeak = false, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
+  const { keyboard = DEFAULT_KEYBOARD, mode = 'answer', phrases = 0, conversation, extraInstructions, prefill = [], minWordsToSpeak = 1, confirmSpeak = false, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
   client ??= new TypeSafeClient()
-  const b = newBranch()
+  const b = newBranch(prefill)
 
   for (let step = 0; step < maxSteps; step++) {
-    const menu = menuFor(b, { words: nWords, common, minWordsToSpeak, phrases, keyboard })
+    const menu = menuFor(b, { words: nWords, common, minWordsToSpeak: minWordsToSpeak + prefill.length, phrases, keyboard })
     const state = { instructions: extraInstructions ? `${instructionsFor(mode, keyboard)}\n${extraInstructions}` : instructionsFor(mode, keyboard), ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recentActions(b), text_so_far: branchText(b) || '(nothing yet)', letters_typed: b.prefix || '(none)' }
     const questions = { next: choice('Which menu option do you pick next?', menu) }
     if (dryRun) {
@@ -461,8 +466,20 @@ export function save(t: Talk): string {
   return out
 }
 
-// A bare yes or no ("no", "no.", "no. no"): allowed, but it has to clear a higher bar to win.
-export const isBare = (text: string) => /^\s*((yes|no)[\s.,?!]*)+$/i.test(text)
+// A bare yes or no ("no", "no.", "no. no", "not"): allowed, but it has to clear a higher bar to win.
+export const isBare = (text: string) => /^\s*((yes|yep|yeah|no|nope|not|maybe)[\s.,?!]*)+$/i.test(text)
+
+// Jev's own verdict on a yes-or-no question, as the probability of yes. Asked fresh, without the
+// keyboard, so it is the plainest Jev output there is; JT then types the justification.
+export const UNSURE = 0.1
+export async function verdict(question: string, conversation?: Post[]): Promise<{ yes: number; word: string }> {
+  const r = await jev().systemOne({
+    state: { you: 'Jev, called JT on Bluesky', ...(conversation?.length ? { conversation_so_far: conversation } : {}), message: question },
+    questions: { yes: noul('Is the answer to the yes-or-no question in the message yes?') },
+  })
+  const yes = (r.answers.yes as { noul: number }).noul
+  return { yes, word: Math.abs(yes - 0.5) < UNSURE ? 'maybe' : yes >= 0.5 ? 'yes' : 'no' }
+}
 
 export const meanConfidence = (t: Talk) => t.steps.reduce((x, s) => x + s.confidence, 0) / (t.steps.length || 1)
 

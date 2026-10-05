@@ -36,6 +36,8 @@ export type BeamOptions = {
   mode?: Mode
   // Drafts written elsewhere (the single path's answer) to rate alongside the beam's own.
   seed?: string[]
+  // Words already typed before the search starts (a yes-or-no verdict).
+  prefill?: string[]
   conversation?: Post[]
   width?: number
   split?: number
@@ -106,7 +108,7 @@ function distinctBy<T>(items: T[], key: (t: T) => string): T[] {
 }
 
 export async function beam(question: string, opts: BeamOptions = {}): Promise<BeamTalk> {
-  const { keyboard, mode = 'answer', conversation, seed = [], width = 3, split = 0.05, maxSplit = 3, maxSteps = 40, scoring = 'mean', good = GOOD_ENOUGH, dryRun = false, log = () => {} } = opts
+  const { keyboard, mode = 'answer', conversation, seed = [], prefill = [], width = 3, split = 0.05, maxSplit = 3, maxSteps = 40, scoring = 'mean', good = GOOD_ENOUGH, dryRun = false, log = () => {} } = opts
   // A product of probabilities shrinks with every pick, so it favours short drafts; the
   // geometric mean ranks drafts by how confident each pick was, whatever their length.
   const rank = (b: Branch) =>
@@ -114,7 +116,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
   const byRank = (x: Branch, y: Branch) => rank(y) - rank(x)
   const distinct = (bs: Branch[]) => distinctBy([...bs].sort(byRank), branchText)
   const client = jev()
-  let live: Branch[] = [newBranch()]
+  let live: Branch[] = [newBranch(prefill)]
   const finished: Branch[] = []
   // Each distinct finished draft's yes-probability for "is this a good final answer?".
   const ratings = new Map<string, number>()
@@ -151,7 +153,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
 
   for (let step = 0; step < maxSteps && live.length; step++) {
     const ids = live.map((_, i) => `b${i}`)
-    const menus = live.map((b) => menuFor(b, { ...MENU, keyboard }))
+    const menus = live.map((b) => menuFor(b, { ...MENU, minWordsToSpeak: MENU.minWordsToSpeak + prefill.length, keyboard }))
     const branchState = Object.fromEntries(
       live.map((b, i) => [ids[i], { text_so_far: branchText(b) || '(nothing yet)', letters_typed: b.prefix || '(none)', recent_actions: recentActions(b) }]),
     )
@@ -212,7 +214,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
   const drafts = distinct(finished)
   const winner = drafts.length
     ? drafts.reduce((best, b) => ((ratings.get(branchText(b)) ?? 0) > (ratings.get(branchText(best)) ?? 0) ? b : best))
-    : live[0] ?? newBranch()
+    : live[0] ?? newBranch(prefill)
   const judged = drafts.length ? Object.fromEntries(drafts.filter((b) => ratings.has(branchText(b))).map((b) => [branchText(b), ratings.get(branchText(b))!])) : null
   if (judged) log(`judge: ${branchText(winner)}  (${Object.entries(judged).map(([k, v]) => `${k} ${(v * 100).toFixed(0)}%`).join(', ')})`)
   return {

@@ -125,6 +125,7 @@ export function renderSvg(t: Talk, { full = false } = {}): string {
     const path = (t as Partial<HybridTalk>).path
     const bits = [
       `mode: ${d.mode}${d.modeConfidence !== undefined ? ` ${Math.round(d.modeConfidence * 100)}%` : ''}`,
+      ...(d.verdict ? [`verdict: ${d.verdict.word} (yes ${Math.round(d.verdict.yes * 100)}%)`] : []),
       ...(d.contextTotal ? [`context: kept ${d.contextKept} of ${d.contextTotal} posts`] : []),
       ...d.images.map((img) => `saw: "${clip(img, full ? 200 : 60)}"`),
       ...(path ? [`path: ${path === 'beam' ? `beam → ${Object.keys((t as Partial<HybridTalk>).judged ?? {}).length} drafts` : 'single draft'}`] : []),
