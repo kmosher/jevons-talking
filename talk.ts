@@ -22,7 +22,7 @@ import { choice, noul, TypeSafeClient } from '@typesafe-ai/sdk'
 export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number }
 export type Talk = { question: string; answer: string; finished: boolean; steps: Step[] }
 export type Post = { author: string; text: string }
-type Options = { conversation?: Post[]; extraInstructions?: string; minWordsToSpeak?: number; confirmSpeak?: boolean; maxRejections?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
+type Options = { phrases?: number; conversation?: Post[]; extraInstructions?: string; minWordsToSpeak?: number; confirmSpeak?: boolean; maxRejections?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
 
 // --- Blocklist ---------------------------------------------------------------
 const blocked = new Set(
@@ -106,7 +106,25 @@ export type Branch = {
   rejections: number
   score: number
 }
-export type MenuOptions = { words: number; common: number; minWordsToSpeak: number }
+// Bigram followers that make a phrase: at least this share of what follows the word, and seen this often.
+const PHRASE_SHARE = 0.15
+const PHRASE_MIN = 5
+const followerCache = new Map<string, string | null>()
+function topFollower(w: string): string | null {
+  if (!followerCache.has(w)) {
+    const m = bigram.get(w)
+    let best: string | null = null
+    if (m) {
+      const total = [...m.values()].reduce((a, b) => a + b, 0)
+      const [top, n] = [...m.entries()].sort((a, b) => b[1] - a[1])[0]
+      if (n >= PHRASE_MIN && n / total >= PHRASE_SHARE) best = top
+    }
+    followerCache.set(w, best)
+  }
+  return followerCache.get(w)!
+}
+
+export type MenuOptions = { words: number; common: number; minWordsToSpeak: number; phrases?: number }
 
 export const newBranch = (): Branch => ({ words: [], prefix: '', undo: [], rejected: new Map(), steps: [], rejections: 0, score: 1 })
 export const cloneBranch = (b: Branch): Branch => ({
@@ -122,9 +140,23 @@ const reject = (b: Branch, key: string, option: string) => b.rejected.set(key, (
 
 export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   const { words, prefix } = b
-  const prev = words.length && !/[.,?]/.test(words.at(-1)!) ? words.at(-1)! : START
+  // A phrase is stored as one entry; predictions follow its last word.
+  const prev = words.length && !/[.,?]/.test(words.at(-1)!) ? words.at(-1)!.split(' ').at(-1)! : START
   const menu: Record<string, string> = {}
-  for (const w of predict(prev, prefix, o.words, o.common)) menu[`word: ${w}`] = `append "${w}"`
+  const predicted = predict(prev, prefix, o.words, o.common)
+  for (const w of predicted) menu[`word: ${w}`] = `append "${w}"`
+  // Two-word phrases: a predicted word with its most likely follower, when that pairing is strong.
+  if (o.phrases) {
+    let added = 0
+    for (const w of predicted) {
+      if (added >= o.phrases) break
+      const next = topFollower(w)
+      if (next) {
+        menu[`word: ${w} ${next}`] = `append "${w} ${next}"`
+        added++
+      }
+    }
+  }
   // Any letter or digit, like a real keyboard, so Jev can spell words the predictor doesn't know.
   const letters = 'abcdefghijklmnopqrstuvwxyz0123456789'
   if (prefix && !isBlocked(prefix)) menu[`word: ${prefix}`] ??= `enter "${prefix}" as typed`
@@ -160,12 +192,12 @@ export const recentActions = (b: Branch) => {
 }
 
 export async function talk(question: string, opts: Options = {}): Promise<Talk> {
-  const { conversation, extraInstructions, minWordsToSpeak = 1, confirmSpeak = false, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
+  const { phrases = 0, conversation, extraInstructions, minWordsToSpeak = 1, confirmSpeak = false, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
   client ??= new TypeSafeClient()
   const b = newBranch()
 
   for (let step = 0; step < maxSteps; step++) {
-    const menu = menuFor(b, { words: nWords, common, minWordsToSpeak })
+    const menu = menuFor(b, { words: nWords, common, minWordsToSpeak, phrases })
     const state = { instructions: extraInstructions ? `${instructions}\n${extraInstructions}` : instructions, ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recentActions(b), text_so_far: branchText(b) || '(nothing yet)', letters_typed: b.prefix || '(none)' }
     const questions = { next: choice('Which menu option do you pick next?', menu) }
     if (dryRun) {

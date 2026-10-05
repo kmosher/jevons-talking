@@ -50,7 +50,7 @@ const beamInstructions = `${instructions}
 Several drafts of your answer are being written in parallel; each is a branch under branches_so_far
 with its own text and recent actions. Choose each branch's next option independently, as if that
 draft were the only one.`
-const MENU = { words: 150, common: 30, minWordsToSpeak: 1 }
+const MENU = { words: 150, common: 30, minWordsToSpeak: 1, phrases: Number(process.env.JEV_PHRASES ?? 0) }
 // A draft that uses no word the question didn't has its rating multiplied by this. Every word
 // counts, not just content words: "i am jev" answers "are you Jev?" by its change of person.
 export const ECHO_PENALTY = 0.2

@@ -19,7 +19,7 @@ export type HybridTalk = BeamTalk & { path: 'single' | 'beam' }
 export async function hybrid(question: string, opts: HybridOptions = {}): Promise<HybridTalk> {
   const { conversation, good = HAND_OFF, log = () => {} } = opts
   // The single path gets fewer steps: if it hasn't finished by then, the beam is the better bet.
-  const single = await talk(question, { conversation, maxSteps: SINGLE_STEPS, log })
+  const single = await talk(question, { conversation, maxSteps: SINGLE_STEPS, phrases: Number(process.env.JEV_PHRASES ?? 0), log })
   // One call per pick, plus one per final-answer check, plus the rating below.
   const singleCalls = single.steps.length + single.steps.filter((s) => s.final !== undefined).length + 1
   const rating = single.answer ? (await rateDrafts(question, [single.answer], conversation))[0] : 0
