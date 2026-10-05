@@ -1,4 +1,6 @@
-// Bluesky bot: answers @-mentions and DMs from allowed accounts by running beam().
+// Bluesky bot: answers @-mentions and DMs from allowed accounts by running hybrid().
+// A post is answered only if it @-mentions the bot or replies directly to one of its posts;
+// Bluesky also notifies about other replies anywhere in a thread the bot has posted in.
 // A mention in a thread is answered with the thread back to its root as context (the root
 // plus the most recent posts, within THREAD_POSTS and THREAD_CHARS); DMs are answered one
 // message at a time. Mention replies carry a rendered trace image.
@@ -9,7 +11,8 @@
 // Usage: npm run bot
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { AppBskyFeedDefs, AtpAgent, RichText } from '@atproto/api'
-import { type BeamTalk, beam } from './beam.ts'
+import type { BeamTalk } from './beam.ts'
+import { hybrid } from './hybrid.ts'
 import { renderPng } from './render.ts'
 import { containsBlocked, meanConfidence, type Post, save, type Step, type Talk } from './talk.ts'
 
@@ -74,7 +77,7 @@ function traceChunks(t: Talk, limit: number): string[] {
 
 async function answer(question: string, conversation?: Post[]): Promise<Talk> {
   log(`Q: ${question}${conversation?.length ? ` (+${conversation.length} posts of context)` : ''}`)
-  const t = await beam(question, { conversation, log: (l) => log(l) })
+  const t = await hybrid(question, { conversation, log: (l) => log(l) })
   log(`A: ${t.answer} (${save(t)})`)
   return t
 }
@@ -146,7 +149,14 @@ async function pollMentions() {
       markHandled(n.uri)
       continue
     }
-    const record = n.record as { text: string; reply?: { root: Ref } }
+    const record = n.record as { text: string; reply?: { root: Ref; parent: Ref }; facets?: { features: { $type: string; did?: string }[] }[] }
+    const me = agent.session!.did
+    const mentioned = record.facets?.some((f) => f.features.some((x) => x.$type === 'app.bsky.richtext.facet#mention' && x.did === me))
+    const repliesToMe = record.reply?.parent.uri.startsWith(`at://${me}/`)
+    if (!mentioned && !repliesToMe) {
+      markHandled(n.uri)
+      continue
+    }
     const question = stripHandles(record.text)
     markHandled(n.uri)
     if (!question) continue

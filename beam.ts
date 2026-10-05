@@ -49,7 +49,7 @@ draft were the only one.`
 const MENU = { words: 150, common: 30, minWordsToSpeak: 1 }
 // A draft that uses no word the question didn't has its rating multiplied by this. Every word
 // counts, not just content words: "i am jev" answers "are you Jev?" by its change of person.
-const ECHO_PENALTY = 0.2
+export const ECHO_PENALTY = 0.2
 const wordsOf = (text: string) => text.toLowerCase().match(/[a-z0-9']+/g) ?? []
 export const echoes = (draft: string, question: string) => {
   const asked = new Set(wordsOf(question))

@@ -129,7 +129,8 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   const letters = 'abcdefghijklmnopqrstuvwxyz0123456789'
   if (prefix && !isBlocked(prefix)) menu[`word: ${prefix}`] ??= `enter "${prefix}" as typed`
   for (const l of letters) menu[`letter: ${l}`] = `narrow predictions to words starting "${prefix + l}"`
-  if (!prefix) for (const p of ['.', ',', '?']) menu[p] = `append "${p}"`
+  // No punctuation straight after punctuation, so a blocked bare "no" can't stall on "no,.....".
+  if (!prefix && !/^[.,?]$/.test(words.at(-1) ?? '')) for (const p of ['.', ',', '?']) menu[p] = `append "${p}"`
   if (prefix || words.length) menu.backspace = prefix ? `delete the typed letter "${prefix.at(-1)}"` : `delete "${words.at(-1)}"`
   // A bare yes or no ("no", "no.", "no. no") can't be spoken: Jev has to say something more.
   const bare = words.length > 0 && words.every((w) => /^(yes|no|[.,?])$/.test(w))
