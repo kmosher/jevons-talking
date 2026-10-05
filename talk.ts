@@ -291,6 +291,8 @@ export const jev = () => (client ??= new TypeSafeClient())
 // One draft in progress: its text, the letters typed toward the next word, and what it has rejected.
 export type Branch = {
   words: string[]
+  // How many leading words are fixed (a prefilled verdict) and can't be backspaced.
+  locked: number
   prefix: string
   // Forward moves, so a backspace knows what it undid and from which state.
   undo: { from: string; option: string }[]
@@ -322,7 +324,7 @@ const PUNCTUATION = [...'.,?!:;\'"-–—…()[]{}/\\&*@#$%^+=_~<>|`']
 
 export type MenuOptions = { words: number; common: number; minWordsToSpeak: number; phrases?: number; keyboard?: Keyboard }
 
-export const newBranch = (words: string[] = []): Branch => ({ words: [...words], prefix: '', undo: [], rejected: new Map(), steps: [], rejections: 0, score: 1 })
+export const newBranch = (words: string[] = []): Branch => ({ words: [...words], locked: words.length, prefix: '', undo: [], rejected: new Map(), steps: [], rejections: 0, score: 1 })
 export const cloneBranch = (b: Branch): Branch => ({
   ...b,
   words: [...b.words],
@@ -341,7 +343,7 @@ const reject = (b: Branch, key: string, option: string) => b.rejected.set(key, (
 export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   if (DASHER) {
     const menu = dasherMenu(`${branchText(b)}${b.words.length ? ' ' : ''}${b.prefix}`)
-    if (b.prefix || b.words.length) menu.backspace = 'delete the last character'
+    if (b.prefix || b.words.length > b.locked) menu.backspace = 'delete the last character'
     if (b.words.length && !b.prefix) menu.SPEAK = 'finish and speak the text aloud'
     for (const opt of b.rejected.get(branchKey(b)) ?? []) delete menu[opt]
     return menu
@@ -368,11 +370,14 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   }
   // Any letter or digit, like a real keyboard, so Jev can spell words the predictor doesn't know.
   const letters = 'abcdefghijklmnopqrstuvwxyz0123456789'
-  if (prefix && !isBlocked(prefix)) menu[`word: ${prefix}`] ??= `enter "${prefix}" as typed`
+  // A lone letter is only a word if it's "a", "i" or a digit; otherwise committing it leaves a
+  // stray "s" where Jev was heading for a word the predictions hadn't shown yet.
+  const committable = prefix.length > 1 || /^[ai0-9]$/i.test(prefix)
+  if (committable && !isBlocked(prefix)) menu[`word: ${prefix}`] ??= `enter "${prefix}" as typed`
   for (const l of keyboard === 'letters' ? [...letters, ...PAIRS] : letters) menu[`letter: ${l}`] = `narrow predictions to words starting "${prefix + l}"`
   for (const p of PUNCTUATION) menu[`key: ${p}`] = `type "${p}"`
-  if (prefix) menu.SPACE = `end the word "${prefix}" as typed`
-  if (prefix || words.length) menu.backspace = prefix ? `delete the typed letter "${prefix.at(-1)}"` : `delete "${words.at(-1)}"`
+  if (committable) menu.SPACE = `end the word "${prefix}" as typed`
+  if (prefix || words.length > b.locked) menu.backspace = prefix ? `delete the typed letter "${prefix.at(-1)}"` : `delete "${words.at(-1)}"`
   if (words.filter((w) => /\w/.test(w)).length >= o.minWordsToSpeak && !prefix) menu.SPEAK = 'finish and speak the text aloud'
   for (const opt of b.rejected.get(branchKey(b)) ?? []) delete menu[opt]
   return menu
