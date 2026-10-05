@@ -1,7 +1,8 @@
-// Renders a talk() transcript as a PNG: one row per pick showing what Jev chose, how
-// confident it was, the options it passed over, and the text as it stood afterwards.
+// Renders a transcript as a PNG: the question and answer, the drafts a beam search rated, and
+// every keystroke Jev made with a bar for how confident it was. With `full`, it adds a table
+// with one row per pick: the options passed over and the text as it stood afterwards.
 //
-// Usage: node --import tsx render.ts <transcript.json> [out.png]
+// Usage: node --import tsx render.ts <transcript.json> [out.png] [--full]
 import { readFileSync, writeFileSync } from 'node:fs'
 import { Resvg } from '@resvg/resvg-js'
 import type { BeamTalk } from './beam.ts'
@@ -97,7 +98,7 @@ function row(step: Step, i: number, after: { text: string; prefix: string }, y: 
   return parts.join('')
 }
 
-export function renderSvg(t: Talk): string {
+export function renderSvg(t: Talk, { full = false } = {}): string {
   const states = replay(t.steps)
   let indices = t.steps.map((_, i) => i)
   let gapAfter = -1
@@ -115,11 +116,10 @@ export function renderSvg(t: Talk): string {
   const meta = `${t.steps.length} picks · mean confidence ${meanConfidence(t).toFixed(2)}${calls ? ` · ${calls} Jev calls` : ''}${t.finished ? '' : ' · ran out of picks'}`
   parts.push(`<text x="${PAD}" y="${top + 88}" font-family="${SANS}" font-size="14" fill="${C.muted}">${esc(meta)}</text>`)
 
-  // Every pick in order, as the text trace shows it, wrapped across lines.
   let y = top + 112
-  // Beam runs: the finished drafts and how Jev rated each as a final answer.
+  // When there was more than one candidate: each, and how Jev rated it as a final answer.
   const judged = (t as Partial<BeamTalk>).judged
-  if (judged) {
+  if (judged && Object.keys(judged).length > 1) {
     parts.push(`<text x="${PAD}" y="${y + 4}" font-family="${SANS}" font-size="12" font-weight="700" fill="${C.muted}" letter-spacing="1">DRAFTS · RATED AS A FINAL ANSWER</text>`)
     y += 26
     for (const [draft, p] of Object.entries(judged).sort((a, b) => b[1] - a[1])) {
@@ -131,25 +131,34 @@ export function renderSvg(t: Talk): string {
     }
     y += 14
   }
+  // Every keystroke in order, wrapped across lines, each with a bar for Jev's confidence in it.
+  parts.push(`<text x="${PAD}" y="${y + 4}" font-family="${SANS}" font-size="12" font-weight="700" fill="${C.muted}" letter-spacing="1">KEYSTROKES · BAR = CONFIDENCE</text>`)
+  y += 18
+  const KEY_H = 26
+  const LINE_H = KEY_H + 18
   let x = PAD
   const strip: string[] = []
   for (const step of t.steps) {
     const k = kind(step.pick)
     const text = k === 'backspace' ? '⌫' : withdrawn(step) ? 'SPEAK?✗' : label(step.pick)
-    const w = textWidth(text, 14) + 12
+    const w = Math.max(KEY_H, textWidth(text, 16) + 14)
     if (x + w > W - PAD) {
       x = PAD
-      y += 26
+      y += LINE_H
     }
     const fill = withdrawn(step) ? '#fff' : { word: C.orange, letter: '#fff', backspace: '#fff', speak: C.ink }[k]
     const ink = withdrawn(step) ? C.ink : { word: '#fff', letter: C.orange, backspace: C.red, speak: '#fff' }[k]
     const stroke = k === 'letter' ? C.orange : k === 'backspace' ? C.red : withdrawn(step) ? C.ink : fill
-    strip.push(`<rect x="${x}" y="${y}" width="${w}" height="21" rx="5" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`)
-    strip.push(`<text x="${x + w / 2}" y="${y + 15}" font-family="${k === 'letter' ? MONO : SANS}" font-size="14" font-weight="700" fill="${ink}" text-anchor="middle">${esc(text)}</text>`)
-    x += w + 4
+    strip.push(`<rect x="${x}" y="${y}" width="${w}" height="${KEY_H}" rx="6" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`)
+    strip.push(`<text x="${x + w / 2}" y="${y + 18}" font-family="${k === 'letter' ? MONO : SANS}" font-size="16" font-weight="700" fill="${ink}" text-anchor="middle">${esc(text)}</text>`)
+    strip.push(`<rect x="${x}" y="${y + KEY_H + 4}" width="${w}" height="5" rx="2.5" fill="${C.line}"/>`)
+    strip.push(`<rect x="${x}" y="${y + KEY_H + 4}" width="${Math.max(2, w * step.confidence)}" height="5" rx="2.5" fill="${C.ink}"/>`)
+    x += w + 5
   }
   parts.push(...strip)
-  y += 21 + 40
+  y += LINE_H + 22
+  if (!full) return finish(parts, y)
+
   parts.push(`<text x="${PAD + 36}" y="${y}" font-family="${SANS}" font-size="12" font-weight="700" fill="${C.muted}" letter-spacing="1">PICKED</text>`)
   parts.push(`<text x="${PAD + 236}" y="${y}" font-family="${SANS}" font-size="12" font-weight="700" fill="${C.muted}" letter-spacing="1">PASSED OVER</text>`)
   parts.push(`<text x="${W - PAD}" y="${y}" font-family="${SANS}" font-size="12" font-weight="700" fill="${C.muted}" letter-spacing="1" text-anchor="end">TEXT SO FAR</text>`)
@@ -163,20 +172,25 @@ export function renderSvg(t: Talk): string {
       y += ROW
     }
   }
-  y += 16
+  return finish(parts, y + 16)
+}
+
+// Adds the footer and wraps the parts in an SVG sized to fit.
+function finish(parts: string[], y: number): string {
   parts.push(`<text x="${W - PAD}" y="${y}" font-family="${SANS}" font-size="12" fill="${C.muted}" text-anchor="end">@jevons-talking.bsky.social · github.com/kmosher/jevons-talking</text>`)
   const H = y + PAD - 12
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><rect width="${W}" height="${H}" fill="${C.bg}"/>${parts.join('')}</svg>`
 }
 
-export function renderPng(t: Talk, zoom = 2): { png: Buffer; width: number; height: number } {
-  const r = new Resvg(renderSvg(t), { fitTo: { mode: 'zoom', value: zoom }, font: { loadSystemFonts: true, defaultFontFamily: 'Helvetica Neue' } }).render()
+export function renderPng(t: Talk, zoom = 2, full = false): { png: Buffer; width: number; height: number } {
+  const r = new Resvg(renderSvg(t, { full }), { fitTo: { mode: 'zoom', value: zoom }, font: { loadSystemFonts: true, defaultFontFamily: 'Helvetica Neue' } }).render()
   return { png: r.asPng(), width: r.width, height: r.height }
 }
 
 if (import.meta.main) {
-  const [input, out = 'trace.png'] = process.argv.slice(2)
-  const { png } = renderPng(JSON.parse(readFileSync(input, 'utf8')))
+  const args = process.argv.slice(2)
+  const [input, out = 'trace.png'] = args.filter((a) => !a.startsWith('--'))
+  const { png } = renderPng(JSON.parse(readFileSync(input, 'utf8')), 2, args.includes('--full'))
   writeFileSync(out, png)
   console.log(`wrote ${out} (${(png.length / 1024).toFixed(0)} KB)`)
 }
