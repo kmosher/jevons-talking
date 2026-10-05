@@ -7,7 +7,11 @@
 // Polls every 30s and handles one question at a time. On its first run it marks
 // everything already there as handled, so it only answers messages sent after that.
 //
-// Env: BLUESKY_HANDLE, BLUESKY_APP_PASSWORD, ALLOWED_HANDLES (comma-separated), TYPESAFE_API_KEY
+// Anyone may ask, within PER_USER_DAILY questions each (FRIEND_DAILY for people connected to an
+// owner by a follow either way) and GLOBAL_DAILY in total per UTC day;
+// past either limit the bot says so once and then stays quiet until the next day.
+//
+// Env: BLUESKY_HANDLE, BLUESKY_APP_PASSWORD, ALLOWED_HANDLES (comma-separated, or * for anyone), OWNER_HANDLES, TYPESAFE_API_KEY
 // Usage: npm run bot
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { AppBskyFeedDefs, AtpAgent, RichText } from '@atproto/api'
@@ -18,7 +22,14 @@ import { containsBlocked, meanConfidence, type Post, save, type Step, type Talk 
 
 const HANDLE = process.env.BLUESKY_HANDLE ?? 'jevons-talking.bsky.social'
 const PASSWORD = process.env.BLUESKY_APP_PASSWORD
-const ALLOWED = (process.env.ALLOWED_HANDLES ?? 'mosheroperandi.bsky.social').split(',').map((h) => h.trim())
+const ALLOWED = (process.env.ALLOWED_HANDLES ?? '*').split(',').map((h) => h.trim())
+const OPEN = ALLOWED.includes('*')
+// Owners are exempt from the daily limits.
+const OWNERS = (process.env.OWNER_HANDLES ?? 'mosheroperandi.bsky.social').split(',').map((h) => h.trim())
+const PER_USER_DAILY = 5
+// For anyone who follows an owner or whom an owner follows.
+const FRIEND_DAILY = 24
+const GLOBAL_DAILY = 100
 const POLL_MS = 30_000
 const POST_LIMIT = 300
 const DM_LIMIT = 1000
@@ -29,21 +40,55 @@ const IMAGE_LIMIT = 950_000
 if (!PASSWORD) throw new Error('BLUESKY_APP_PASSWORD is not set')
 
 // Mention URIs and DM ids already answered (or seen before the bot's first run).
-type State = { handled: string[] }
+type Usage = { day: string; total: number; perUser: Record<string, number>; warned: string[] }
+type State = { handled: string[]; usage?: Usage }
 const state: State = existsSync(STATE_FILE) ? JSON.parse(readFileSync(STATE_FILE, 'utf8')) : { handled: [] }
 let firstRun = !existsSync(STATE_FILE)
 const handled = new Set(state.handled)
+const today = () => new Date().toISOString().slice(0, 10)
+let usage: Usage = state.usage?.day === today() ? state.usage : { day: today(), total: 0, perUser: {}, warned: [] }
+const saveState = () => writeFileSync(STATE_FILE, JSON.stringify({ handled: [...handled].slice(-5000), usage }))
+// 'ok' to answer (and counts it), 'warn' to say the limit is reached, 'quiet' once already warned.
+async function admit(did: string): Promise<'ok' | 'warn' | 'quiet'> {
+  if (ownerDids.has(did)) return 'ok'
+  if (usage.day !== today()) usage = { day: today(), total: 0, perUser: {}, warned: [] }
+  const limit = (await isFriend(did)) ? FRIEND_DAILY : PER_USER_DAILY
+  const result = usage.total >= GLOBAL_DAILY || (usage.perUser[did] ?? 0) >= limit ? (usage.warned.includes(did) ? 'quiet' : 'warn') : 'ok'
+  if (result === 'ok') {
+    usage.total++
+    usage.perUser[did] = (usage.perUser[did] ?? 0) + 1
+  } else if (result === 'warn') usage.warned.push(did)
+  saveState()
+  return result
+}
+// Whether `did` follows, or is followed by, any owner. Cached for the bot's lifetime.
+const friends = new Map<string, boolean>()
+async function isFriend(did: string): Promise<boolean> {
+  if (!friends.has(did)) {
+    let friend = false
+    for (const owner of ownerDids) {
+      const { data } = await agent.app.bsky.graph.getRelationships({ actor: owner, others: [did] })
+      const rel = data.relationships[0] as { following?: string; followedBy?: string } | undefined
+      if (rel?.following || rel?.followedBy) friend = true
+    }
+    friends.set(did, friend)
+  }
+  return friends.get(did)!
+}
+const LIMIT_REPLY = 'I’m out of words for today. Try again tomorrow.'
 const markHandled = (id: string) => {
   handled.add(id)
-  writeFileSync(STATE_FILE, JSON.stringify({ handled: [...handled].slice(-5000) }))
+  saveState()
 }
 
 const agent = new AtpAgent({ service: 'https://bsky.social' })
 await agent.login({ identifier: HANDLE, password: PASSWORD })
 const chat = agent.withProxy('bsky_chat', 'did:web:api.bsky.chat')
-const allowedDids = new Set(await Promise.all(ALLOWED.map(async (handle) => (await agent.resolveHandle({ handle })).data.did)))
+const allowedDids = new Set(await Promise.all(ALLOWED.filter((h) => h !== '*').map(async (handle) => (await agent.resolveHandle({ handle })).data.did)))
+const ownerDids = new Set(await Promise.all(OWNERS.map(async (handle) => (await agent.resolveHandle({ handle })).data.did)))
+const isAllowed = (did: string) => did !== agent.session?.did && (OPEN || allowedDids.has(did))
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), ...a)
-log(`logged in as ${HANDLE}; answering ${ALLOWED.join(', ')}`)
+log(`logged in as ${HANDLE}; answering ${OPEN ? 'anyone' : ALLOWED.join(', ')}`)
 
 // --- Formatting ----------------------------------------------------------------
 const pickLabel = (step: Step) =>
@@ -145,7 +190,7 @@ async function pollMentions() {
   const { data } = await agent.listNotifications({ reasons: ['mention', 'reply'], limit: 50 })
   for (const n of data.notifications.reverse()) {
     if (handled.has(n.uri)) continue
-    if (firstRun || !allowedDids.has(n.author.did)) {
+    if (firstRun || !isAllowed(n.author.did)) {
       markHandled(n.uri)
       continue
     }
@@ -160,10 +205,16 @@ async function pollMentions() {
     const question = stripHandles(record.text)
     markHandled(n.uri)
     if (!question) continue
-    const context = record.reply ? await threadContext(n.uri) : undefined
-    const t = await answer(question, context)
     const parent = { uri: n.uri, cid: n.cid }
     const root = record.reply?.root ?? parent
+    const admitted = await admit(n.author.did)
+    if (admitted !== 'ok') {
+      log(`over limit: @${n.author.handle} (${admitted})`)
+      if (admitted === 'warn') await post(LIMIT_REPLY, root, parent)
+      continue
+    }
+    const context = record.reply ? await threadContext(n.uri) : undefined
+    const t = await answer(question, context)
     const image = containsBlocked(t.answer) ? undefined : await traceImage(t)
     const last = await post(headline(t), root, parent, image)
     if (!image) {
@@ -178,7 +229,7 @@ async function pollMentions() {
 async function pollDms() {
   const { data } = await chat.chat.bsky.convo.listConvos({ limit: 50 })
   for (const convo of data.convos) {
-    if (!convo.members.some((m) => allowedDids.has(m.did))) continue
+    if (!convo.members.some((m) => isAllowed(m.did))) continue
     if (!firstRun && convo.unreadCount === 0) continue
     const { data: msgs } = await chat.chat.bsky.convo.getMessages({ convoId: convo.id, limit: 20 })
     for (const m of msgs.messages.reverse()) {
@@ -186,9 +237,14 @@ async function pollDms() {
       const msg = m as { id: string; text: string; sender: { did: string } }
       if (handled.has(msg.id)) continue
       markHandled(msg.id)
-      if (firstRun || !allowedDids.has(msg.sender.did) || !msg.text.trim()) continue
-      const t = await answer(msg.text.trim())
+      if (firstRun || !isAllowed(msg.sender.did) || !msg.text.trim()) continue
       const send = (text: string) => chat.chat.bsky.convo.sendMessage({ convoId: convo.id, message: { text } })
+      const admitted = await admit(msg.sender.did)
+      if (admitted !== 'ok') {
+        if (admitted === 'warn') await send(LIMIT_REPLY)
+        continue
+      }
+      const t = await answer(msg.text.trim())
       await send(headline(t))
       for (const chunk of traceChunks(t, DM_LIMIT)) await send(chunk)
     }

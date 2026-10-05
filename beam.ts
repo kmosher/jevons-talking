@@ -21,12 +21,15 @@ import {
   menuFor,
   newBranch,
   type Post,
+  type Step,
   recentActions,
   save,
   type Talk,
 } from './talk.ts'
 
 export type BeamOptions = {
+  // Drafts written elsewhere (the single path's answer) to rate alongside the beam's own.
+  seed?: string[]
   conversation?: Post[]
   width?: number
   split?: number
@@ -40,7 +43,7 @@ export type BeamOptions = {
   log?: (line: string) => void
 }
 export type Draft = { answer: string; score: number; picks: number }
-export type BeamTalk = Talk & { drafts: Draft[]; judged: Record<string, number> | null; calls: number }
+export type BeamTalk = Talk & { drafts: Draft[]; draftSteps?: Record<string, Step[]>; judged: Record<string, number> | null; calls: number }
 
 const beamInstructions = `${instructions}
 Several drafts of your answer are being written in parallel; each is a branch under branches_so_far
@@ -51,6 +54,27 @@ const MENU = { words: 150, common: 30, minWordsToSpeak: 1 }
 // counts, not just content words: "i am jev" answers "are you Jev?" by its change of person.
 export const ECHO_PENALTY = 0.2
 const wordsOf = (text: string) => text.toLowerCase().match(/[a-z0-9']+/g) ?? []
+// Drafts are rated without trailing punctuation: a final "." swung the same answer's rating
+// by 20-30 points ("i like it" 61%, "i like it." 38%).
+const forRating = (draft: string) => draft.replace(/[\s.,?!]+$/, '')
+const adjust = (draft: string, question: string, rating: number) => (echoes(draft, question) ? rating * ECHO_PENALTY : rating)
+
+// Rates candidate answers in a fresh call that sees only the question, the conversation and
+// the candidates: no keyboard instructions, branches or history, which swung ratings of the
+// same answer by tens of points.
+export async function rateDrafts(question: string, drafts: string[], conversation?: Post[]): Promise<number[]> {
+  const ids = drafts.map((_, i) => `a${i}`)
+  const r = await jev().systemOne({
+    state: {
+      ...(conversation?.length ? { conversation_so_far: conversation } : {}),
+      question,
+      candidate_answers: Object.fromEntries(drafts.map((d, i) => [ids[i], forRating(d)])),
+    },
+    questions: Object.fromEntries(ids.map((id) => [id, noul(`Is candidate answer \`${id}\` a good answer to the question?`)])),
+  })
+  return drafts.map((d, i) => adjust(d, question, (r.answers[ids[i]] as { noul: number }).noul))
+}
+
 export const echoes = (draft: string, question: string) => {
   const asked = new Set(wordsOf(question))
   return wordsOf(draft).every((w) => asked.has(w) || asked.has(w.replace(/s$/, '')) || asked.has(`${w}s`))
@@ -66,7 +90,7 @@ function distinctBy<T>(items: T[], key: (t: T) => string): T[] {
 }
 
 export async function beam(question: string, opts: BeamOptions = {}): Promise<BeamTalk> {
-  const { conversation, width = 3, split = 0.05, maxSplit = 3, maxSteps = 40, scoring = 'mean', good = GOOD_ENOUGH, dryRun = false, log = () => {} } = opts
+  const { conversation, seed = [], width = 3, split = 0.05, maxSplit = 3, maxSteps = 40, scoring = 'mean', good = GOOD_ENOUGH, dryRun = false, log = () => {} } = opts
   // A product of probabilities shrinks with every pick, so it favours short drafts; the
   // geometric mean ranks drafts by how confident each pick was, whatever their length.
   const rank = (b: Branch) =>
@@ -90,7 +114,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
       ...(conversation?.length ? { conversation_so_far: conversation } : {}),
       question,
       ...(branchState ? { branches_so_far: branchState } : {}),
-      ...(drafts.length ? { finished_drafts: Object.fromEntries(drafts.map((d, i) => [draftIds[i], d])) } : {}),
+      ...(drafts.length ? { finished_drafts: Object.fromEntries(drafts.map((d, i) => [draftIds[i], forRating(d)])) } : {}),
     }
     const questions = {
       ...branchQuestions,
@@ -102,13 +126,10 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
     }
     const r = await client.systemOne({ state, questions })
     calls++
-    drafts.forEach((d, i) => {
-      const rating = (r.answers[draftIds[i]] as { noul: number }).noul
-      ratings.set(d, echoes(d, question) ? rating * ECHO_PENALTY : rating)
-    })
+    drafts.forEach((d, i) => ratings.set(d, adjust(d, question, (r.answers[draftIds[i]] as { noul: number }).noul)))
     return r.answers
   }
-  const unrated = () => distinct(finished).map(branchText).filter((d) => !ratings.has(d))
+  const unrated = () => [...seed, ...distinct(finished).map(branchText)].filter((d, i, all) => d && all.indexOf(d) === i && !ratings.has(d))
   const bestRated = () => Math.max(0, ...ratings.values())
 
   for (let step = 0; step < maxSteps && live.length; step++) {
@@ -183,6 +204,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
     finished: drafts.length > 0,
     steps: winner.steps,
     drafts: drafts.map((b) => ({ answer: branchText(b), score: rank(b), picks: b.steps.length })),
+    draftSteps: Object.fromEntries(drafts.map((b) => [branchText(b), b.steps])),
     judged,
     calls,
   }
