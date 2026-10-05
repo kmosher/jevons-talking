@@ -13,13 +13,11 @@
 //
 // Env: BLUESKY_HANDLE, BLUESKY_APP_PASSWORD, ALLOWED_HANDLES (comma-separated, or * for anyone), OWNER_HANDLES, TYPESAFE_API_KEY
 // Usage: npm run bot
-import { execFile } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { hostname, tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { promisify } from 'node:util'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { hostname } from 'node:os'
 import { AppBskyFeedDefs, AtpAgent, RichText } from '@atproto/api'
 import type { BeamTalk } from './beam.ts'
+import { describeImage, loadCaptioner } from './caption.ts'
 import { hybrid } from './hybrid.ts'
 import { renderPng } from './render.ts'
 import { containsBlocked, meanConfidence, type Post, save, type Step, type Talk } from './talk.ts'
@@ -93,6 +91,10 @@ const ownerDids = new Set(await Promise.all(OWNERS.map(async (handle) => (await 
 const isAllowed = (did: string) => did !== agent.session?.did && (OPEN || allowedDids.has(did))
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), ...a)
 log(`logged in as ${HANDLE}; answering ${OPEN ? 'anyone' : ALLOWED.join(', ')}`)
+await loadCaptioner().then(
+  () => log('image captioner loaded'),
+  (e) => log('image captioner failed to load; will retry on the next image:', e instanceof Error ? e.message : e),
+)
 
 // --- Formatting ----------------------------------------------------------------
 const pickLabel = (step: Step) =>
@@ -141,37 +143,16 @@ const addressed = (text: string) => text.replace(new RegExp(`@${HANDLE.replace(/
 const ownText = (text: string) => text.split('\n\n')[0].trim()
 
 // --- Images --------------------------------------------------------------------
-// Every image gets a one-sentence description from gpt-6-luna via a stripped-down `codex exec`
-// (no user config, rules, plugins, skills, apps, hooks or shell, run from an empty folder), plus
-// the poster's alt text when there is some. The model only ever describes images; it never
-// writes Jev's words.
-const run = promisify(execFile)
-const CODEX_ARGS = [
-  'exec', '--ignore-user-config', '--ignore-rules', '--ephemeral', '--skip-git-repo-check', '-s', 'read-only',
-  '-m', 'gpt-6-luna', '-c', 'model_reasoning_effort=low',
-  ...['apps', 'hooks', 'multi_agent', 'image_generation', 'plugins', 'skill_search', 'skill_mcp_dependency_install', 'shell_tool'].flatMap((f) => ['--disable', f]),
-]
+// Every image gets a description from Florence-2 (caption.ts), plus the poster's alt text when
+// there is some.
 const captions = new Map<string, string | null>()
 async function describe(url: string): Promise<string | null> {
   if (captions.has(url)) return captions.get(url)!
-  const dir = mkdtempSync(join(tmpdir(), 'jevons-image-'))
-  const image = join(dir, 'image.jpg')
-  const out = join(dir, 'caption.txt')
   let caption: string | null = null
   try {
-    writeFileSync(image, Buffer.from(await (await fetch(url)).arrayBuffer()))
-    const job = run('codex', [...CODEX_ARGS, '-i', image, '-o', out, "Describe the attached image in one plain sentence for someone who can't see it. No preamble."], {
-      cwd: dir,
-      timeout: 90_000,
-    })
-    // codex exec reads extra prompt from stdin when it's a pipe; close it so it doesn't wait.
-    job.child.stdin?.end()
-    await job
-    caption = readFileSync(out, 'utf8').trim() || null
+    caption = await describeImage(url)
   } catch (e) {
     log('image description failed:', e instanceof Error ? e.message : e)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
   }
   if (caption) log(`image described: ${caption}`)
   captions.set(url, caption)
