@@ -275,9 +275,38 @@ async function threadContext(uri: string): Promise<Post[]> {
   return [...(rootPost ? [rootPost] : []), ...(gap ? [{ author: '…', text: '(earlier posts omitted)' }] : []), ...kept]
 }
 
+// Bluesky occasionally creates no notification for a reply, so every SWEEP_EVERY polls the bot
+// also reads the replies under its own posts from the last day, and treats any it hasn't handled
+// like a notification.
+const SWEEP_EVERY = 5
+let polls = 0
+type Incoming = { uri: string; cid: string; author: { did: string; handle: string }; record: unknown; indexedAt: string }
+async function missedReplies(): Promise<Incoming[]> {
+  if (polls++ % SWEEP_EVERY) return []
+  const me = agent.session!.did
+  const { data } = await agent.getAuthorFeed({ actor: me, limit: 20, filter: 'posts_with_replies' })
+  const out: Incoming[] = []
+  for (const item of data.feed) {
+    if (item.post.author.did !== me || Date.parse(item.post.indexedAt) < Date.now() - 86_400_000) continue
+    const t: unknown = (await agent.getPostThread({ uri: item.post.uri, depth: 1, parentHeight: 0 })).data.thread
+    if (!AppBskyFeedDefs.isThreadViewPost(t)) continue
+    for (const r of (t as AppBskyFeedDefs.ThreadViewPost).replies ?? []) {
+      if (!AppBskyFeedDefs.isThreadViewPost(r)) continue
+      const p = (r as AppBskyFeedDefs.ThreadViewPost).post
+      if (p.author.did !== me && !handled.has(p.uri)) out.push({ uri: p.uri, cid: p.cid, author: p.author, record: p.record, indexedAt: p.indexedAt })
+    }
+  }
+  if (out.length) log(`sweep found ${out.length} reply(s) with no notification`)
+  return out
+}
+
 async function pollMentions() {
   const { data } = await agent.listNotifications({ reasons: ['mention', 'reply'], limit: 50 })
-  for (const n of data.notifications.reverse()) {
+  const seen = new Set(data.notifications.map((n) => n.uri))
+  const incoming: Incoming[] = [...data.notifications, ...(await missedReplies()).filter((r) => !seen.has(r.uri))].sort((x, y) =>
+    x.indexedAt.localeCompare(y.indexedAt),
+  )
+  for (const n of incoming) {
     if (handled.has(n.uri)) continue
     if (firstRun || !isAllowed(n.author.did)) {
       markHandled(n.uri)
