@@ -18,6 +18,7 @@ import {
   cloneBranch,
   instructionsFor,
   jev,
+  type Keyboard,
   type Mode,
   MODES,
   menuFor,
@@ -31,6 +32,7 @@ import {
 } from './talk.ts'
 
 export type BeamOptions = {
+  keyboard?: Keyboard
   mode?: Mode
   // Drafts written elsewhere (the single path's answer) to rate alongside the beam's own.
   seed?: string[]
@@ -49,7 +51,7 @@ export type BeamOptions = {
 export type Draft = { answer: string; score: number; picks: number }
 export type BeamTalk = Talk & { drafts: Draft[]; draftSteps?: Record<string, Step[]>; judged: Record<string, number> | null; calls: number }
 
-const beamInstructions = (mode: Mode) => `${instructionsFor(mode)}
+const beamInstructions = (mode: Mode, keyboard?: Keyboard) => `${instructionsFor(mode, keyboard)}
 Several drafts of your answer are being written in parallel; each is a branch under branches_so_far
 with its own text and recent actions. Choose each branch's next option independently, as if that
 draft were the only one.`
@@ -57,6 +59,8 @@ const MENU = { words: 150, common: 30, minWordsToSpeak: 1, phrases: Number(proce
 // A draft that uses no word the question didn't has its rating multiplied by this. Every word
 // counts, not just content words: "i am jev" answers "are you Jev?" by its change of person.
 export const ECHO_PENALTY = 0.2
+// How much a "generic" rating marks a candidate down in rateDrafts: rating × (1 − weight × generic).
+const GENERIC_WEIGHT = 0.5
 const wordsOf = (text: string) => text.toLowerCase().match(/[a-z0-9']+/g) ?? []
 // Drafts are rated without trailing punctuation: a final "." swung the same answer's rating
 // by 20-30 points ("i like it" 61%, "i like it." 38%).
@@ -74,9 +78,17 @@ export async function rateDrafts(question: string, drafts: string[], conversatio
       question,
       candidate_answers: Object.fromEntries(drafts.map((d, i) => [ids[i], forRating(d)])),
     },
-    questions: Object.fromEntries(ids.map((id) => [id, noul(`Is candidate \`${id}\` ${MODES[mode].judge}?`)])),
+    questions: Object.fromEntries(
+      ids.flatMap((id) => [
+        [id, noul(`Is candidate \`${id}\` ${MODES[mode].judge}?`)],
+        [`${id}_generic`, noul(`Is candidate \`${id}\` generic: a reply that could answer almost any message?`)],
+      ]),
+    ),
   })
-  return drafts.map((d, i) => adjust(d, question, (r.answers[ids[i]] as { noul: number }).noul))
+  const v = (k: string) => (r.answers[k] as { noul: number }).noul
+  // Generic replies ("lol", "thanks", "so funny") are marked down: Jev's "good" rating alone
+  // doesn't penalise blandness, and asking it for "surprising" rewarded word salad instead.
+  return drafts.map((d, i) => adjust(d, question, v(ids[i]) * (1 - GENERIC_WEIGHT * v(`${ids[i]}_generic`))))
 }
 
 export const echoes = (draft: string, question: string) => {
@@ -94,7 +106,7 @@ function distinctBy<T>(items: T[], key: (t: T) => string): T[] {
 }
 
 export async function beam(question: string, opts: BeamOptions = {}): Promise<BeamTalk> {
-  const { mode = 'answer', conversation, seed = [], width = 3, split = 0.05, maxSplit = 3, maxSteps = 40, scoring = 'mean', good = GOOD_ENOUGH, dryRun = false, log = () => {} } = opts
+  const { keyboard, mode = 'answer', conversation, seed = [], width = 3, split = 0.05, maxSplit = 3, maxSteps = 40, scoring = 'mean', good = GOOD_ENOUGH, dryRun = false, log = () => {} } = opts
   // A product of probabilities shrinks with every pick, so it favours short drafts; the
   // geometric mean ranks drafts by how confident each pick was, whatever their length.
   const rank = (b: Branch) =>
@@ -114,7 +126,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
   const ask = async (branchQuestions: Record<string, ReturnType<typeof choice>>, branchState: Record<string, { text_so_far: string; letters_typed: string; recent_actions: string | string[] }> | null, drafts: string[]) => {
     const draftIds = drafts.map((_, i) => `d${i}`)
     const state = {
-      instructions: beamInstructions(mode),
+      instructions: beamInstructions(mode, keyboard),
       ...(conversation?.length ? { conversation_so_far: conversation } : {}),
       question,
       ...(branchState ? { branches_so_far: branchState } : {}),
@@ -139,7 +151,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
 
   for (let step = 0; step < maxSteps && live.length; step++) {
     const ids = live.map((_, i) => `b${i}`)
-    const menus = live.map((b) => menuFor(b, MENU))
+    const menus = live.map((b) => menuFor(b, { ...MENU, keyboard }))
     const branchState = Object.fromEntries(
       live.map((b, i) => [ids[i], { text_so_far: branchText(b) || '(nothing yet)', letters_typed: b.prefix || '(none)', recent_actions: recentActions(b) }]),
     )

@@ -2,8 +2,8 @@
 // each step offers predicted next words alongside letters that narrow
 // the predictions, plus punctuation, backspace and SPEAK. Jev picks one option per call.
 //
-// Word prediction is a bigram model over WordNet glosses and their example sentences, plus
-// the conversational phrases in conversation.txt,
+// Word prediction is a bigram model over WordNet glosses and their example sentences (plus,
+// with JEV_CHAT_WORDS=1, the conversational phrases in conversation.txt),
 // with some slots reserved for the most common words so a function word like "is"
 // is always on offer even after a word with many followers. Words in blocklist.txt
 // are never offered and can't be entered by spelling them out.
@@ -15,7 +15,9 @@
 // removed from that menu, so a stateless Jev can't loop on the same dead end.
 //
 // Usage: npm run talk -- [--q="What is a black hole?"] [--max-steps=100] [--words=150] [--common=30] [--dry-run]
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { gunzipSync } from 'node:zlib'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { choice, noul, TypeSafeClient } from '@typesafe-ai/sdk'
@@ -24,7 +26,7 @@ import { chunkOf, dasherMenu } from './dasher.ts'
 export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number }
 export type Talk = { question: string; answer: string; finished: boolean; steps: Step[] }
 export type Post = { author: string; text: string }
-type Options = { mode?: Mode; phrases?: number; conversation?: Post[]; extraInstructions?: string; minWordsToSpeak?: number; confirmSpeak?: boolean; maxRejections?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
+type Options = { keyboard?: Keyboard; mode?: Mode; phrases?: number; conversation?: Post[]; extraInstructions?: string; minWordsToSpeak?: number; confirmSpeak?: boolean; maxRejections?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
 
 // --- Blocklist ---------------------------------------------------------------
 const blocked = new Set(
@@ -62,42 +64,51 @@ for (const pos of ['noun', 'verb', 'adj', 'adv']) {
 }
 // A small hand-written list of conversational phrases, weighted so that "thanks", "lol" or
 // "fair enough" can compete with dictionary prose in the predictions.
+// Opt-in with JEV_CHAT_WORDS=1.
 const CONVERSATION_WEIGHT = 500
-for (const line of readFileSync(new URL('conversation.txt', import.meta.url), 'utf8').split('\n')) {
-  if (line.trim() && !line.startsWith('#')) count(line.toLowerCase(), CONVERSATION_WEIGHT)
-}
-// JEV_AOSP_WORDLIST=<path to an AOSP LatinIME *_wordlist.combined> ranks words by Android's
-// keyboard frequencies instead of WordNet's, for the common slots, backoff and completions.
-const AOSP = process.env.JEV_AOSP_WORDLIST
-const byFrequency = AOSP
-  ? (() => {
-      const f = new Map<string, number>()
-      for (const m of readFileSync(AOSP, 'utf8').matchAll(/word=([^,]+),f=(\d+)/g)) {
-        const w = m[1].toLowerCase()
-        if (/^[a-z]+(?:'[a-z]+)?$/.test(w) && !isBlocked(w)) f.set(w, Math.max(f.get(w) ?? 0, Number(m[2])))
-      }
-      return [...f.entries()].sort((a, b) => b[1] - a[1]).map(([w]) => w)
-    })()
-  : [...unigram.entries()].sort((a, b) => b[1] - a[1]).map(([w]) => w)
+if (process.env.JEV_CHAT_WORDS === '1')
+  for (const line of readFileSync(new URL('conversation.txt', import.meta.url), 'utf8').split('\n')) {
+    if (line.trim() && !line.startsWith('#')) count(line.toLowerCase(), CONVERSATION_WEIGHT)
+  }
+// Words are ranked (for the common slots, backoff and completions) by Android's keyboard
+// frequencies from AOSP LatinIME, in data/; JEV_RANKING=wordnet ranks by WordNet counts instead.
+const AOSP = process.env.JEV_AOSP_WORDLIST ?? fileURLToPath(new URL('data/aosp_en_US_wordlist.combined.gz', import.meta.url))
+const byFrequency =
+  process.env.JEV_RANKING !== 'wordnet' && existsSync(AOSP)
+    ? (() => {
+        const raw = readFileSync(AOSP)
+        const text = AOSP.endsWith('.gz') ? gunzipSync(raw).toString('utf8') : raw.toString('utf8')
+        const f = new Map<string, number>()
+        for (const m of text.matchAll(/word=([^,]+),f=(\d+)/g)) {
+          const w = m[1].toLowerCase()
+          if (/^[a-z]+(?:'[a-z]+)?$/.test(w) && !isBlocked(w)) f.set(w, Math.max(f.get(w) ?? 0, Number(m[2])))
+        }
+        return [...f.entries()].sort((a, b) => b[1] - a[1]).map(([w]) => w)
+      })()
+    : [...unigram.entries()].sort((a, b) => b[1] - a[1]).map(([w]) => w)
 
 // The `common` most frequent words matching the typed prefix, then bigram
 // continuations of `prev`, then unigram backoff to fill `n` slots.
-// JEV_PREDICTOR=completion turns prediction off until Jev types a letter, then offers only the
-// most frequent words starting with what it typed: a plain keyboard with completions.
-const COMPLETION_ONLY = process.env.JEV_PREDICTOR === 'completion'
+// Two keyboards. "words": predicted next words from the bigram model, plus letters to narrow
+// them. "letters": no predictions until Jev types something, then the most frequent words
+// starting with it; two-letter keys for common letter pairs speed up the typing.
+export type Keyboard = 'words' | 'letters'
+export const KEYBOARDS: Record<Keyboard, string> = {
+  words: 'a predictive keyboard: offers likely next words from dictionary definitions, fast and fluent but drifts toward stock phrasing',
+  letters: 'a plain keyboard: you type letters (or common letter pairs) and it completes the word, slower but every word is your own',
+}
+const DEFAULT_KEYBOARD: Keyboard = process.env.JEV_PREDICTOR === 'completion' ? 'letters' : 'words'
 // JEV_PREDICTOR=dasher swaps the whole keyboard for the Dasher-style character model in dasher.ts.
 const DASHER = process.env.JEV_PREDICTOR === 'dasher'
-// JEV_PAIRS=N also offers the N most frequent two-letter combinations (by word frequency) as keys.
+// The 40 most frequent two-letter combinations, by word frequency, for the letters keyboard.
 const PAIRS: string[] = (() => {
-  const n = Number(process.env.JEV_PAIRS ?? 0)
-  if (!n) return []
   const counts = new Map<string, number>()
   for (const [w, c] of unigram) for (let i = 0; i + 1 < w.length; i++) if (/^[a-z]{2}$/.test(w.slice(i, i + 2))) counts.set(w.slice(i, i + 2), (counts.get(w.slice(i, i + 2)) ?? 0) + c)
-  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([p]) => p)
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, Number(process.env.JEV_PAIRS ?? 40)).map(([p]) => p)
 })()
 
-function predict(prev: string, prefix: string, n: number, common: number): string[] {
-  if (COMPLETION_ONLY) return prefix ? byFrequency.filter((w) => w.startsWith(prefix)).slice(0, n) : []
+function predict(prev: string, prefix: string, n: number, common: number, keyboard: Keyboard = DEFAULT_KEYBOARD): string[] {
+  if (keyboard === 'letters') return prefix ? byFrequency.filter((w) => w.startsWith(prefix)).slice(0, n) : []
   const out = new Set<string>()
   const follow = [...(bigram.get(prev)?.entries() ?? [])].sort((a, b) => b[1] - a[1]).map(([w]) => w)
   const take = (source: string[], limit: number) => {
@@ -155,10 +166,19 @@ export type Mode = keyof typeof MODES
 const DASHER_NOTE = `This keyboard is different: every option is "type: X", which types the characters X (␣ is a space,
 "space" types one), with the chance a typical writer would type it next. End each word with a space; SPEAK is
 offered once the last word is finished.`
-export const instructionsFor = (mode: Mode = 'answer') => `${instructions}\n${DASHER ? `${DASHER_NOTE}\n` : ''}${MODES[mode].instruction}`
+const LETTERS_NOTE = `This keyboard offers no word predictions until you type: type letters (some keys type a common
+two-letter pair), and words starting with what you've typed appear to pick from.`
+export const instructionsFor = (mode: Mode = 'answer', keyboard: Keyboard = DEFAULT_KEYBOARD) =>
+  `${instructions}\n${DASHER ? `${DASHER_NOTE}\n` : keyboard === 'letters' ? `${LETTERS_NOTE}\n` : ''}${MODES[mode].instruction}`
 
 // One choice call: which kind of reply the message calls for.
-export async function classify(question: string, conversation?: Post[]): Promise<{ mode: Mode; confidence: number }> {
+// One choice call: which kind of reply the message calls for and, with chooseKeyboard, which
+// keyboard Jev wants to write it with.
+export async function classify(
+  question: string,
+  conversation?: Post[],
+  chooseKeyboard = false,
+): Promise<{ mode: Mode; confidence: number; keyboard?: Keyboard; keyboardConfidence?: number }> {
   const r = await jev().systemOne({
     state: { ...(conversation?.length ? { conversation_so_far: conversation } : {}), message: question },
     questions: {
@@ -166,10 +186,19 @@ export async function classify(question: string, conversation?: Post[]): Promise
         'What kind of reply does the message call for?',
         Object.fromEntries(Object.entries(MODES).map(([k, m]) => [k, `reply this way when ${m.when}`])),
       ),
+      ...(chooseKeyboard
+        ? {
+            keyboard: choice(
+              'You will write your reply one menu pick at a time. Which keyboard would you rather write it with?',
+              Object.fromEntries(Object.entries(KEYBOARDS).map(([k, d]) => [k, d])),
+            ),
+          }
+        : {}),
     },
   })
   const a = r.answers.mode as { choice: Mode; confidence: number }
-  return { mode: a.choice, confidence: a.confidence }
+  const k = r.answers.keyboard as { choice: Keyboard; confidence: number } | undefined
+  return { mode: a.choice, confidence: a.confidence, keyboard: k?.choice, keyboardConfidence: k?.confidence }
 }
 const HISTORY = 10
 let client: TypeSafeClient | undefined
@@ -204,7 +233,7 @@ function topFollower(w: string): string | null {
   return followerCache.get(w)!
 }
 
-export type MenuOptions = { words: number; common: number; minWordsToSpeak: number; phrases?: number }
+export type MenuOptions = { words: number; common: number; minWordsToSpeak: number; phrases?: number; keyboard?: Keyboard }
 
 export const newBranch = (): Branch => ({ words: [], prefix: '', undo: [], rejected: new Map(), steps: [], rejections: 0, score: 1 })
 export const cloneBranch = (b: Branch): Branch => ({
@@ -230,7 +259,8 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   // A phrase is stored as one entry; predictions follow its last word.
   const prev = words.length && !/[.,?]/.test(words.at(-1)!) ? words.at(-1)!.split(' ').at(-1)! : START
   const menu: Record<string, string> = {}
-  const predicted = predict(prev, prefix, o.words, o.common)
+  const keyboard = o.keyboard ?? DEFAULT_KEYBOARD
+  const predicted = predict(prev, prefix, o.words, o.common, keyboard)
   for (const w of predicted) menu[`word: ${w}`] = `append "${w}"`
   // Two-word phrases: a predicted word with its most likely follower, when that pairing is strong.
   if (o.phrases) {
@@ -247,7 +277,7 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   // Any letter or digit, like a real keyboard, so Jev can spell words the predictor doesn't know.
   const letters = 'abcdefghijklmnopqrstuvwxyz0123456789'
   if (prefix && !isBlocked(prefix)) menu[`word: ${prefix}`] ??= `enter "${prefix}" as typed`
-  for (const l of [...letters, ...PAIRS]) menu[`letter: ${l}`] = `narrow predictions to words starting "${prefix + l}"`
+  for (const l of keyboard === 'letters' ? [...letters, ...PAIRS] : letters) menu[`letter: ${l}`] = `narrow predictions to words starting "${prefix + l}"`
   // No punctuation straight after punctuation, so Jev can't stall on "no,.....".
   if (!prefix && !/^[.,?]$/.test(words.at(-1) ?? '')) for (const p of ['.', ',', '?']) menu[p] = `append "${p}"`
   if (prefix || words.length) menu.backspace = prefix ? `delete the typed letter "${prefix.at(-1)}"` : `delete "${words.at(-1)}"`
@@ -294,13 +324,13 @@ export const recentActions = (b: Branch) => {
 }
 
 export async function talk(question: string, opts: Options = {}): Promise<Talk> {
-  const { mode = 'answer', phrases = 0, conversation, extraInstructions, minWordsToSpeak = 1, confirmSpeak = false, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
+  const { keyboard = DEFAULT_KEYBOARD, mode = 'answer', phrases = 0, conversation, extraInstructions, minWordsToSpeak = 1, confirmSpeak = false, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
   client ??= new TypeSafeClient()
   const b = newBranch()
 
   for (let step = 0; step < maxSteps; step++) {
-    const menu = menuFor(b, { words: nWords, common, minWordsToSpeak, phrases })
-    const state = { instructions: extraInstructions ? `${instructionsFor(mode)}\n${extraInstructions}` : instructionsFor(mode), ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recentActions(b), text_so_far: branchText(b) || '(nothing yet)', letters_typed: b.prefix || '(none)' }
+    const menu = menuFor(b, { words: nWords, common, minWordsToSpeak, phrases, keyboard })
+    const state = { instructions: extraInstructions ? `${instructionsFor(mode, keyboard)}\n${extraInstructions}` : instructionsFor(mode, keyboard), ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recentActions(b), text_so_far: branchText(b) || '(nothing yet)', letters_typed: b.prefix || '(none)' }
     const questions = { next: choice('Which menu option do you pick next?', menu) }
     if (dryRun) {
       console.log(JSON.stringify({ state, questions }, null, 2))
