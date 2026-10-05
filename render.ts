@@ -4,6 +4,7 @@
 // Usage: node --import tsx render.ts <transcript.json> [out.png]
 import { readFileSync, writeFileSync } from 'node:fs'
 import { Resvg } from '@resvg/resvg-js'
+import type { BeamTalk } from './beam.ts'
 import { meanConfidence, type Step, type Talk } from './talk.ts'
 
 const W = 1080
@@ -110,11 +111,26 @@ export function renderSvg(t: Talk): string {
   const parts: string[] = []
   parts.push(`<text x="${PAD}" y="${top + 16}" font-family="${SANS}" font-size="15" fill="${C.muted}">Q: ${esc(clip(t.question, 100))}</text>`)
   parts.push(`<text x="${PAD}" y="${top + 58}" font-family="${SERIF}" font-size="34" font-weight="700" fill="${C.ink}">${esc(clip(t.answer || '…', 56))}</text>`)
-  const meta = `${t.steps.length} picks · mean confidence ${meanConfidence(t).toFixed(2)}${t.finished ? '' : ' · ran out of picks'}`
+  const calls = (t as Partial<BeamTalk>).calls
+  const meta = `${t.steps.length} picks · mean confidence ${meanConfidence(t).toFixed(2)}${calls ? ` · ${calls} Jev calls` : ''}${t.finished ? '' : ' · ran out of picks'}`
   parts.push(`<text x="${PAD}" y="${top + 88}" font-family="${SANS}" font-size="14" fill="${C.muted}">${esc(meta)}</text>`)
 
   // Every pick in order, as the text trace shows it, wrapped across lines.
   let y = top + 112
+  // Beam runs: the finished drafts and how Jev rated each as a final answer.
+  const judged = (t as Partial<BeamTalk>).judged
+  if (judged) {
+    parts.push(`<text x="${PAD}" y="${y + 4}" font-family="${SANS}" font-size="12" font-weight="700" fill="${C.muted}" letter-spacing="1">DRAFTS · RATED AS A FINAL ANSWER</text>`)
+    y += 26
+    for (const [draft, p] of Object.entries(judged).sort((a, b) => b[1] - a[1])) {
+      const won = draft === t.answer
+      parts.push(`<rect x="${PAD}" y="${y - 10}" width="120" height="12" rx="3" fill="${C.chip}"/>`)
+      parts.push(`<rect x="${PAD}" y="${y - 10}" width="${Math.max(3, 120 * p)}" height="12" rx="3" fill="${won ? C.orange : C.muted}"/>`)
+      parts.push(`<text x="${PAD + 130}" y="${y + 1}" font-family="${SANS}" font-size="14" font-weight="${won ? 700 : 400}" fill="${C.ink}">${Math.round(p * 100)}%  ${esc(clip(draft, 90))}${won ? '  ✓' : ''}</text>`)
+      y += 22
+    }
+    y += 14
+  }
   let x = PAD
   const strip: string[] = []
   for (const step of t.steps) {

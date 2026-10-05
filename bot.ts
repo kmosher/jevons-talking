@@ -1,4 +1,4 @@
-// Bluesky bot: answers @-mentions and DMs from allowed accounts by running talk().
+// Bluesky bot: answers @-mentions and DMs from allowed accounts by running beam().
 // A mention in a thread is answered with the thread back to its root as context (the root
 // plus the most recent posts, within THREAD_POSTS and THREAD_CHARS); DMs are answered one
 // message at a time. Mention replies carry a rendered trace image.
@@ -9,8 +9,9 @@
 // Usage: npm run bot
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { AppBskyFeedDefs, AtpAgent, RichText } from '@atproto/api'
+import { type BeamTalk, beam } from './beam.ts'
 import { renderPng } from './render.ts'
-import { containsBlocked, meanConfidence, type Post, save, type Step, type Talk, talk } from './talk.ts'
+import { containsBlocked, meanConfidence, type Post, save, type Step, type Talk } from './talk.ts'
 
 const HANDLE = process.env.BLUESKY_HANDLE ?? 'jevons-talking.bsky.social'
 const PASSWORD = process.env.BLUESKY_APP_PASSWORD
@@ -52,7 +53,8 @@ const pickLabel = (step: Step) =>
 function headline(t: Talk): string {
   if (containsBlocked(t.answer)) return '(Jev composed something I won’t post.)'
   const answer = t.answer || '…'
-  const tail = `${t.steps.length} picks · mean confidence ${meanConfidence(t).toFixed(2)}${t.finished ? '' : ' · ran out of picks'}`
+  const calls = (t as Partial<BeamTalk>).calls
+  const tail = `${t.steps.length} picks · ${calls ? `${calls} Jev calls · ` : ''}mean confidence ${meanConfidence(t).toFixed(2)}${t.finished ? '' : ' · ran out of picks'}`
   return `${answer}\n\n${tail}`
 }
 
@@ -72,7 +74,7 @@ function traceChunks(t: Talk, limit: number): string[] {
 
 async function answer(question: string, conversation?: Post[]): Promise<Talk> {
   log(`Q: ${question}${conversation?.length ? ` (+${conversation.length} posts of context)` : ''}`)
-  const t = await talk(question, { conversation, log: (l) => log(l) })
+  const t = await beam(question, { conversation, log: (l) => log(l) })
   log(`A: ${t.answer} (${save(t)})`)
   return t
 }
