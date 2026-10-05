@@ -7,6 +7,7 @@
   "private": true,
   "scripts": {
     "talk": "TYPESAFE_API_KEY=\"${TYPESAFE_API_KEY:-$(security find-generic-password -a \"$USER\" -s typesafe-jev -w 2>/dev/null)}\" NODE_USE_ENV_PROXY=1 node --import tsx talk.ts",
+    "talk:beam": "TYPESAFE_API_KEY=\"${TYPESAFE_API_KEY:-$(security find-generic-password -a \"$USER\" -s typesafe-jev -w 2>/dev/null)}\" NODE_USE_ENV_PROXY=1 node --import tsx beam.ts",
     "bot": "TYPESAFE_API_KEY=\"${TYPESAFE_API_KEY:-$(security find-generic-password -a \"$USER\" -s typesafe-jev -w 2>/dev/null)}\" BLUESKY_APP_PASSWORD=\"${BLUESKY_APP_PASSWORD:-$(security find-generic-password -a jevons-talking.bsky.social -s bluesky-jevons -w 2>/dev/null)}\" NODE_USE_ENV_PROXY=1 node --import tsx bot.ts",
     "typecheck": "tsc --noEmit -p ."
   },

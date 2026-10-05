@@ -77,7 +77,7 @@ function predict(prev: string, prefix: string, n: number, common: number): strin
 }
 
 // --- Menu loop ---------------------------------------------------------------
-const instructions = `You are composing a spoken answer to a question using an assistive
+export const instructions = `You are composing a spoken answer to a question using an assistive
 communication menu. You cannot type freely: each turn you pick exactly one
 menu option. Options are:
 - "word: X" — append the predicted word X to your sentence.
@@ -93,35 +93,79 @@ by "you" are your own earlier replies.
 Aim for a short, correct answer of one or two sentences, then pick SPEAK.`
 const HISTORY = 10
 let client: TypeSafeClient | undefined
+export const jev = () => (client ??= new TypeSafeClient())
+
+// One draft in progress: its text, the letters typed toward the next word, and what it has rejected.
+export type Branch = {
+  words: string[]
+  prefix: string
+  // Forward moves, so a backspace knows what it undid and from which state.
+  undo: { from: string; option: string }[]
+  rejected: Map<string, Set<string>>
+  steps: Step[]
+  rejections: number
+  score: number
+}
+export type MenuOptions = { words: number; common: number; minWordsToSpeak: number }
+
+export const newBranch = (): Branch => ({ words: [], prefix: '', undo: [], rejected: new Map(), steps: [], rejections: 0, score: 1 })
+export const cloneBranch = (b: Branch): Branch => ({
+  ...b,
+  words: [...b.words],
+  undo: [...b.undo],
+  rejected: new Map([...b.rejected].map(([k, v]) => [k, new Set(v)])),
+  steps: [...b.steps],
+})
+export const branchKey = (b: Branch) => `${b.words.join(' ')}|${b.prefix}`
+export const branchText = (b: Branch) => b.words.join(' ').replace(/ ([.,?])/g, '$1')
+const reject = (b: Branch, key: string, option: string) => b.rejected.set(key, (b.rejected.get(key) ?? new Set()).add(option))
+
+export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
+  const { words, prefix } = b
+  const prev = words.length && !/[.,?]/.test(words.at(-1)!) ? words.at(-1)! : START
+  const menu: Record<string, string> = {}
+  for (const w of predict(prev, prefix, o.words, o.common)) menu[`word: ${w}`] = `append "${w}"`
+  // Any letter or digit, like a real keyboard, so Jev can spell words the predictor doesn't know.
+  const letters = 'abcdefghijklmnopqrstuvwxyz0123456789'
+  if (prefix && !isBlocked(prefix)) menu[`word: ${prefix}`] ??= `enter "${prefix}" as typed`
+  for (const l of letters) menu[`letter: ${l}`] = `narrow predictions to words starting "${prefix + l}"`
+  if (!prefix) for (const p of ['.', ',', '?']) menu[p] = `append "${p}"`
+  if (prefix || words.length) menu.backspace = prefix ? `delete the typed letter "${prefix.at(-1)}"` : `delete "${words.at(-1)}"`
+  if (words.filter((w) => /\w/.test(w)).length >= o.minWordsToSpeak && !prefix) menu.SPEAK = 'finish and speak the text aloud'
+  for (const opt of b.rejected.get(branchKey(b)) ?? []) delete menu[opt]
+  return menu
+}
+
+// Applies a non-SPEAK pick to the branch.
+export function applyPick(b: Branch, pick: string) {
+  if (pick === 'backspace') {
+    const last = b.undo.pop()
+    if (last) reject(b, last.from, last.option)
+    if (b.prefix) b.prefix = b.prefix.slice(0, -1)
+    else b.words.pop()
+    return
+  }
+  b.undo.push({ from: branchKey(b), option: pick })
+  if (pick.startsWith('letter: ')) b.prefix += pick.slice(8)
+  else if (pick.startsWith('word: ')) {
+    b.words.push(pick.slice(6))
+    b.prefix = ''
+  } else b.words.push(pick)
+}
+
+export const recentActions = (b: Branch) => {
+  const recent = b.steps.slice(-HISTORY).map((s) => s.pick)
+  return recent.length ? recent : '(none)'
+}
 
 export async function talk(question: string, opts: Options = {}): Promise<Talk> {
   const { conversation, extraInstructions, minWordsToSpeak = 1, confirmSpeak = true, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
   client ??= new TypeSafeClient()
-  const words: string[] = []
-  let prefix = ''
-  // Forward moves, so a backspace knows what it undid and from which state.
-  const undo: { from: string; option: string }[] = []
-  const rejected = new Map<string, Set<string>>()
-  const steps: Step[] = []
-  let rejections = 0
-  const key = () => `${words.join(' ')}|${prefix}`
-  const text = () => words.join(' ').replace(/ ([.,?])/g, '$1')
+  const b = newBranch()
 
   for (let step = 0; step < maxSteps; step++) {
-    const prev = words.length && !/[.,?]/.test(words.at(-1)!) ? words.at(-1)! : START
-    const menu: Record<string, string> = {}
-    for (const w of predict(prev, prefix, nWords, common)) menu[`word: ${w}`] = `append "${w}"`
-    // Any letter or digit, like a real keyboard, so Jev can spell words the predictor doesn't know.
-    const letters = 'abcdefghijklmnopqrstuvwxyz0123456789'
-    if (prefix && !isBlocked(prefix)) menu[`word: ${prefix}`] ??= `enter "${prefix}" as typed`
-    for (const l of letters) menu[`letter: ${l}`] = `narrow predictions to words starting "${prefix + l}"`
-    if (!prefix) for (const p of ['.', ',', '?']) menu[p] = `append "${p}"`
-    if (prefix || words.length) menu.backspace = prefix ? `delete the typed letter "${prefix.at(-1)}"` : `delete "${words.at(-1)}"`
-    if (words.filter((w) => /\w/.test(w)).length >= minWordsToSpeak && !prefix) menu.SPEAK = 'finish and speak the text aloud'
-    for (const o of rejected.get(key()) ?? []) delete menu[o]
-
-    const recent = steps.slice(-HISTORY).map((s) => s.pick)
-    const state = { instructions: extraInstructions ? `${instructions}\n${extraInstructions}` : instructions, ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recent.length ? recent : '(none)', text_so_far: text() || '(nothing yet)', letters_typed: prefix || '(none)' }
+    const menu = menuFor(b, { words: nWords, common, minWordsToSpeak })
+    const state = { instructions: extraInstructions ? `${instructions}\n${extraInstructions}` : instructions, ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recentActions(b), text_so_far: branchText(b) || '(nothing yet)', letters_typed: b.prefix || '(none)' }
     const questions = { next: choice('Which menu option do you pick next?', menu) }
     if (dryRun) {
       console.log(JSON.stringify({ state, questions }, null, 2))
@@ -129,37 +173,25 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
     }
     const r = await client.systemOne({ state, questions })
     const a = r.answers.next as { choice: string; confidence: number; probabilities: Record<string, number> }
-    steps.push({ menu: Object.keys(menu), pick: a.choice, confidence: a.confidence, probabilities: a.probabilities })
-    log(`${String(step + 1).padStart(2)} ${a.choice.padEnd(16)} conf=${a.confidence.toFixed(2)}  | ${text()}${prefix ? ' ' + prefix + '…' : ''}`)
+    b.steps.push({ menu: Object.keys(menu), pick: a.choice, confidence: a.confidence, probabilities: a.probabilities })
+    log(`${String(step + 1).padStart(2)} ${a.choice.padEnd(16)} conf=${a.confidence.toFixed(2)}  | ${branchText(b)}${b.prefix ? ' ' + b.prefix + '…' : ''}`)
 
     if (a.choice === 'SPEAK') {
-      if (!confirmSpeak || rejections >= maxRejections) break
+      if (!confirmSpeak || b.rejections >= maxRejections) break
       // A second opinion on stopping: a "no" withdraws SPEAK from this point and Jev carries on.
-      const c = await client.systemOne({ state: { ...state, text_so_far: text() }, questions: { final: noul('Is the text so far your final answer?') } })
+      const c = await client.systemOne({ state, questions: { final: noul('Is the text so far your final answer?') } })
       const final = (c.answers.final as { noul: number }).noul
-      steps.at(-1)!.final = final
+      b.steps.at(-1)!.final = final
       log(`   final answer? ${final.toFixed(2)}`)
       if (final >= 0.5) break
-      rejected.set(key(), (rejected.get(key()) ?? new Set()).add('SPEAK'))
-      rejections++
+      reject(b, branchKey(b), 'SPEAK')
+      b.rejections++
       continue
     }
-    if (a.choice === 'backspace') {
-      const last = undo.pop()
-      if (last) rejected.set(last.from, (rejected.get(last.from) ?? new Set()).add(last.option))
-      if (prefix) prefix = prefix.slice(0, -1)
-      else words.pop()
-      continue
-    }
-    undo.push({ from: key(), option: a.choice })
-    if (a.choice.startsWith('letter: ')) prefix += a.choice.slice(8)
-    else if (a.choice.startsWith('word: ')) {
-      words.push(a.choice.slice(6))
-      prefix = ''
-    } else words.push(a.choice)
+    applyPick(b, a.choice)
   }
-  const last = steps.at(-1)
-  return { question, answer: text(), finished: last?.pick === 'SPEAK' && (last.final ?? 1) >= 0.5, steps }
+  const last = b.steps.at(-1)
+  return { question, answer: branchText(b), finished: last?.pick === 'SPEAK' && (last.final ?? 1) >= 0.5, steps: b.steps }
 }
 
 export function save(t: Talk): string {
