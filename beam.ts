@@ -1,14 +1,12 @@
 // Beam search over drafts: every live branch gets its own menu question in a single Jev
-// call. A branch splits on each option at or above SPLIT probability (up to MAX_SPLIT
-// children), scoring children by the product of their picks' probabilities. The best
-// `width` distinct drafts survive each step; a branch that picks SPEAK is finished, and
-// also continues along its most likely other option.
-// Once no live branch can outscore the finished top `width` drafts, Jev picks the best of
-// those in one more choice question. Scores only decide which branches survive, never the winner: a probability
-// product favours short answers, which is the bias this is meant to escape.
+// call. A branch splits on each option at or above `split` probability (up to `maxSplit`
+// children). The best `width` distinct drafts survive each step, ranked by the geometric
+// mean of their picks' probabilities. A branch that picks SPEAK is finished, and also
+// continues along its most likely other option. Once the finished top `width` outrank
+// every live branch, or haven't changed in STALL_STEPS steps, Jev rates each finished draft as a final answer, and the best wins.
 //
-// Usage: npm run -s talk:beam -- [--q="..."] [--width=3] [--split=0.05] [--max-steps=60] [--dry-run]
-import { choice } from '@typesafe-ai/sdk'
+// Usage: npm run -s talk:beam -- [--q="..."] [--width=3] [--split=0.05] [--max-steps=60] [--scoring=mean|product] [--judge=final|choice] [--dry-run]
+import { choice, noul } from '@typesafe-ai/sdk'
 import {
   applyPick,
   type Branch,
@@ -31,6 +29,10 @@ export type BeamOptions = {
   split?: number
   maxSplit?: number
   maxSteps?: number
+  // How branches are ranked: 'mean' (geometric mean of pick probabilities) or 'product'.
+  scoring?: 'mean' | 'product'
+  // How the winner is chosen: 'final' (a yes/no "good final answer?" per draft) or 'choice' (one head-to-head).
+  judge?: 'final' | 'choice'
   dryRun?: boolean
   log?: (line: string) => void
 }
@@ -42,13 +44,29 @@ Several drafts of your answer are being written in parallel; each is a branch un
 with its own text and recent actions. Choose each branch's next option independently, as if that
 draft were the only one.`
 const MENU = { words: 150, common: 30, minWordsToSpeak: 1 }
+// With a full set of finished drafts, stop if it hasn't changed in this many steps.
+const STALL_STEPS = 8
+
+function distinctBy<T>(items: T[], key: (t: T) => string): T[] {
+  const seen = new Set<string>()
+  return items.filter((t) => !seen.has(key(t)) && (seen.add(key(t)), true))
+}
 
 export async function beam(question: string, opts: BeamOptions = {}): Promise<BeamTalk> {
-  const { conversation, width = 3, split = 0.05, maxSplit = 3, maxSteps = 60, dryRun = false, log = () => {} } = opts
+  const { conversation, width = 3, split = 0.05, maxSplit = 3, maxSteps = 60, scoring = 'mean', judge = 'final', dryRun = false, log = () => {} } = opts
+  // A product of probabilities shrinks with every pick, so it favours short drafts; the
+  // geometric mean ranks drafts by how confident each pick was, whatever their length.
+  const rank = (b: Branch) =>
+    scoring === 'product' || !b.steps.length ? b.score : Math.exp(b.steps.reduce((s, st) => s + Math.log(Math.max(st.confidence, 1e-6)), 0) / b.steps.length)
+  const byRank = (x: Branch, y: Branch) => rank(y) - rank(x)
+  const distinct = (bs: Branch[]) => distinctBy([...bs].sort(byRank), branchText)
   const client = jev()
   let live: Branch[] = [newBranch()]
   const finished: Branch[] = []
   let calls = 0
+  // Steps since the finished top `width` last changed.
+  let topKey = ''
+  let stale = 0
 
   for (let step = 0; step < maxSteps && live.length; step++) {
     const ids = live.map((_, i) => `b${i}`)
@@ -94,28 +112,43 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
 
     // Same text and typed letters → same draft; keep the higher-scoring one.
     const byKey = new Map<string, Branch>()
-    for (const c of children) if ((byKey.get(branchKey(c))?.score ?? -1) < c.score) byKey.set(branchKey(c), c)
-    live = [...byKey.values()].sort((x, y) => y.score - x.score).slice(0, width)
-    const bestFinished = Math.max(0, ...finished.map((f) => f.score))
+    for (const c of children) if (rank(byKey.get(branchKey(c)) ?? c) <= rank(c)) byKey.set(branchKey(c), c)
+    live = [...byKey.values()].sort(byRank).slice(0, width)
+    const bestFinished = Math.max(0, ...finished.map(rank))
     log(
       `${String(step + 1).padStart(2)} ` +
-        live.map((b) => `[${b.score.toFixed(3)}] ${branchText(b)}${b.prefix ? ` ${b.prefix}…` : ''}`).join('  |  ') +
+        live.map((b) => `[${rank(b).toFixed(3)}] ${branchText(b)}${b.prefix ? ` ${b.prefix}…` : ''}`).join('  |  ') +
         (finished.length ? `   ✓${finished.length} best ${bestFinished.toFixed(3)}` : ''),
     )
-    // Stop once no live branch can still make the finished top `width` (scores only fall).
-    const top = [...new Map([...finished].sort((x, y) => y.score - x.score).reverse().map((f) => [branchText(f), f])).values()]
-      .sort((x, y) => y.score - x.score)
-      .slice(0, width)
-    if (top.length >= width && live.every((b) => b.score < top.at(-1)!.score)) break
+    // Stop once the finished top `width` all outrank every live branch. (Under product scoring
+    // that's exact, as scores only fall; under mean scoring it's a heuristic.)
+    const top = distinct(finished).slice(0, width)
+    const key = top.map(branchText).join('\n')
+    stale = key === topKey ? stale + 1 : 0
+    topKey = key
+    if (top.length >= width && (live.every((b) => rank(b) < rank(top.at(-1)!)) || stale >= STALL_STEPS)) break
   }
 
-  // Distinct finished drafts, best score first; fall back to the best live draft.
-  const drafts = new Map<string, Branch>()
-  for (const f of [...finished].sort((x, y) => y.score - x.score)) if (!drafts.has(branchText(f))) drafts.set(branchText(f), f)
-  const pool = drafts.size ? [...drafts.values()].slice(0, width) : live.slice(0, 1)
+  // Distinct finished drafts, best first; fall back to the best live draft.
+  const finishedDrafts = distinct(finished)
+  const pool = finishedDrafts.length ? finishedDrafts.slice(0, width) : live.slice(0, 1)
   let winner = pool[0]
   let judged: Record<string, number> | null = null
-  if (pool.length > 1 && !dryRun) {
+  if (pool.length > 1 && !dryRun && judge === 'final') {
+    const ids = pool.map((_, i) => `d${i}`)
+    const j = await client.systemOne({
+      state: {
+        ...(conversation?.length ? { conversation_so_far: conversation } : {}),
+        question,
+        drafts: Object.fromEntries(pool.map((b, i) => [ids[i], branchText(b)])),
+      },
+      questions: Object.fromEntries(ids.map((id) => [id, noul(`Is draft \`${id}\` a good final answer to the question?`)])),
+    })
+    calls++
+    judged = Object.fromEntries(pool.map((b, i) => [branchText(b), (j.answers[ids[i]] as { noul: number }).noul]))
+    winner = pool.reduce((best, b) => (judged![branchText(b)] > judged![branchText(best)] ? b : best))
+    log(`judge: ${branchText(winner)}  (${Object.entries(judged).map(([k, v]) => `${k} ${(v * 100).toFixed(0)}%`).join(', ')})`)
+  } else if (pool.length > 1 && !dryRun) {
     const options = Object.fromEntries(pool.map((b) => [branchText(b), `the answer "${branchText(b)}"`]))
     const j = await client.systemOne({
       state: { ...(conversation?.length ? { conversation_so_far: conversation } : {}), question },
@@ -130,9 +163,9 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
   return {
     question,
     answer: branchText(winner),
-    finished: drafts.size > 0,
+    finished: finishedDrafts.length > 0,
     steps: winner.steps,
-    drafts: pool.map((b) => ({ answer: branchText(b), score: b.score, picks: b.steps.length })),
+    drafts: pool.map((b) => ({ answer: branchText(b), score: rank(b), picks: b.steps.length })),
     judged,
     calls,
   }
@@ -145,6 +178,8 @@ if (import.meta.main) {
     width: Number(flag('width') ?? 3),
     split: Number(flag('split') ?? 0.05),
     maxSteps: Number(flag('max-steps') ?? 60),
+    scoring: (flag('scoring') ?? 'mean') as 'mean' | 'product',
+    judge: (flag('judge') ?? 'final') as 'final' | 'choice',
     dryRun: args.includes('--dry-run'),
     log: (l) => console.error(l),
   })
