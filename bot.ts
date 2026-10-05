@@ -132,6 +132,38 @@ type Ref = { uri: string; cid: string }
 
 const stripHandles = (text: string) => text.replace(/@[\w.-]+/g, '').trim()
 
+// Posts a message points at, by quote embed or by a bsky.app link, as context entries: Jev
+// otherwise sees only a truncated URL.
+type Linking = { embed?: { $type?: string; record?: { uri?: string; record?: { uri?: string } } }; facets?: { features: { $type: string; uri?: string }[] }[] }
+const POST_LINK = /^https:\/\/bsky\.app\/profile\/([^/]+)\/post\/([^/?#]+)/
+async function linkedPosts(msg: Linking): Promise<Post[]> {
+  const uris = new Set<string>()
+  const quoted = msg.embed?.record?.uri ?? msg.embed?.record?.record?.uri
+  if (quoted) uris.add(quoted)
+  for (const f of msg.facets ?? [])
+    for (const feature of f.features) {
+      const m = feature.$type === 'app.bsky.richtext.facet#link' ? feature.uri?.match(POST_LINK) : null
+      if (!m) continue
+      try {
+        const did = m[1].startsWith('did:') ? m[1] : (await agent.resolveHandle({ handle: m[1] })).data.did
+        uris.add(`at://${did}/app.bsky.feed.post/${m[2]}`)
+      } catch {
+        // An unresolvable handle just means no context from that link.
+      }
+    }
+  if (!uris.size) return []
+  const { data } = await agent.getPosts({ uris: [...uris].slice(0, 5) })
+  return data.posts.map((p) => {
+    // Image descriptions, where the poster wrote them, stand in for the images.
+    const images = (p.embed as { images?: { alt?: string }[]; media?: { images?: { alt?: string }[] } } | undefined)
+    const alts = [...(images?.images ?? []), ...(images?.media?.images ?? [])].map((i) => i.alt?.trim()).filter(Boolean)
+    const text = stripHandles((p.record as { text?: string }).text ?? '')
+    return { author: `@${p.author.handle} (linked post)`, text: alts.length ? `${text}\n[image: ${alts.join('; ')}]` : text }
+  })
+}
+// The question with bare links removed; a message that was only a link asks about the linked post.
+const withoutLinks = (text: string) => text.replace(/\S*bsky\.app\/profile\/\S+/g, '').trim()
+
 async function post(text: string, root: Ref, parent: Ref, embed?: { $type: string }): Promise<Ref> {
   const rt = new RichText({ text })
   await rt.detectFacets(agent)
@@ -204,7 +236,9 @@ async function pollMentions() {
     }
     // An owner can add #full to get the full per-pick table in the trace image.
     const full = ownerDids.has(n.author.did) && /#full\b/i.test(record.text)
-    const question = stripHandles(record.text.replace(/#full\b/gi, ''))
+    const linked = await linkedPosts(n.record as Linking)
+    const asked = withoutLinks(stripHandles(record.text.replace(/#full\b/gi, '')))
+    const question = asked || (linked.length ? 'What do you make of the linked post?' : '')
     markHandled(n.uri)
     if (!question) continue
     const parent = { uri: n.uri, cid: n.cid }
@@ -215,8 +249,9 @@ async function pollMentions() {
       if (admitted === 'warn') await post(LIMIT_REPLY, root, parent)
       continue
     }
-    const context = record.reply ? await threadContext(n.uri) : undefined
-    const t = await answer(question, context)
+    const thread = record.reply ? await threadContext(n.uri) : []
+    const context = [...thread, ...linked]
+    const t = await answer(question, context.length ? context : undefined)
     const image = containsBlocked(t.answer) ? undefined : await traceImage(t, full)
     const last = await post(headline(t), root, parent, image)
     if (!image) {
@@ -236,7 +271,7 @@ async function pollDms() {
     const { data: msgs } = await chat.chat.bsky.convo.getMessages({ convoId: convo.id, limit: 20 })
     for (const m of msgs.messages.reverse()) {
       if (m.$type !== 'chat.bsky.convo.defs#messageView') continue
-      const msg = m as { id: string; text: string; sender: { did: string } }
+      const msg = m as { id: string; text: string; sender: { did: string } } & Linking
       if (handled.has(msg.id)) continue
       markHandled(msg.id)
       if (firstRun || !isAllowed(msg.sender.did) || !msg.text.trim()) continue
@@ -246,7 +281,9 @@ async function pollDms() {
         if (admitted === 'warn') await send(LIMIT_REPLY)
         continue
       }
-      const t = await answer(msg.text.trim())
+      const linked = await linkedPosts(msg)
+      const asked = withoutLinks(msg.text)
+      const t = await answer(asked || 'What do you make of the linked post?', linked.length ? linked : undefined)
       await send(headline(t))
       for (const chunk of traceChunks(t, DM_LIMIT)) await send(chunk)
     }
