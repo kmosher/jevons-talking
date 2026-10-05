@@ -89,7 +89,7 @@ menu option. Options are:
 recent_actions lists your last few picks. Options you already backspaced over from the current text
 are not offered again: if you're stuck, backspace further and rephrase.
 If conversation_so_far is present, the question is the latest message in that conversation; posts
-by "you" are your own earlier replies.
+by "you" are your own earlier replies, and "@you" in a message means it is addressed to you.
 Aim for a short, correct answer of one or two sentences, then pick SPEAK.`
 const HISTORY = 10
 let client: TypeSafeClient | undefined

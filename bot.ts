@@ -13,7 +13,11 @@
 //
 // Env: BLUESKY_HANDLE, BLUESKY_APP_PASSWORD, ALLOWED_HANDLES (comma-separated, or * for anyone), OWNER_HANDLES, TYPESAFE_API_KEY
 // Usage: npm run bot
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { AppBskyFeedDefs, AtpAgent, RichText } from '@atproto/api'
 import type { BeamTalk } from './beam.ts'
 import { hybrid } from './hybrid.ts'
@@ -130,7 +134,54 @@ async function answer(question: string, conversation?: Post[]): Promise<Talk> {
 // --- Mentions ------------------------------------------------------------------
 type Ref = { uri: string; cid: string }
 
-const stripHandles = (text: string) => text.replace(/@[\w.-]+/g, '').trim()
+// Mentions of the bot read as "@you", so Jev can tell when it's addressed without being told its
+// name; other handles stay, so it can tell who is talking to whom.
+const addressed = (text: string) => text.replace(new RegExp(`@${HANDLE.replace(/\./g, '\\.')}`, 'gi'), '@you').trim()
+// The bot's own replies, without the stats line under the answer.
+const ownText = (text: string) => text.split('\n\n')[0].trim()
+
+// --- Images --------------------------------------------------------------------
+// Images become text: the poster's alt text, or else a one-sentence description from Claude
+// Haiku via `claude -p`. The LLM only ever describes images; it never writes Jev's words.
+const run = promisify(execFile)
+const captions = new Map<string, string | null>()
+async function describe(url: string): Promise<string | null> {
+  if (captions.has(url)) return captions.get(url)!
+  const file = join(tmpdir(), `jevons-${captions.size}-${Date.now()}.jpg`)
+  let caption: string | null = null
+  try {
+    writeFileSync(file, Buffer.from(await (await fetch(url)).arrayBuffer()))
+    const { stdout } = await run(
+      'claude',
+      ['-p', '--model', 'claude-haiku-4-5', '--tools', 'Read', '--allowedTools', 'Read',
+        '--system-prompt', "You describe images for someone who can't see them. Reply with one plain sentence, no preamble.",
+        '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '', '--disable-slash-commands',
+        '--output-format', 'json', `Describe the image at ${file}`],
+      { timeout: 90_000 },
+    )
+    caption = (JSON.parse(stdout) as { result?: string }).result?.trim() || null
+  } catch (e) {
+    log('image description failed:', e instanceof Error ? e.message : e)
+  } finally {
+    rmSync(file, { force: true })
+  }
+  captions.set(url, caption)
+  return caption
+}
+type ImageView = { fullsize?: string; alt?: string }
+async function imageNotes(p: AppBskyFeedDefs.PostView): Promise<string> {
+  if (p.author.did === agent.session?.did) return ''
+  const embed = p.embed as { images?: ImageView[]; media?: { images?: ImageView[] } } | undefined
+  const images = [...(embed?.images ?? []), ...(embed?.media?.images ?? [])].slice(0, 4)
+  const notes = await Promise.all(images.map(async (i) => i.alt?.trim() || (i.fullsize ? await describe(i.fullsize) : null)))
+  return notes.filter(Boolean).map((n) => `\n[image: ${n}]`).join('')
+}
+// A post as a context entry: the bot's own posts as "you", without stats or trace images.
+async function asContext(p: AppBskyFeedDefs.PostView, suffix = ''): Promise<Post> {
+  const text = (p.record as { text?: string }).text ?? ''
+  if (p.author.did === agent.session?.did) return { author: `you${suffix}`, text: ownText(text) }
+  return { author: `@${p.author.handle}${suffix}`, text: addressed(text) + (await imageNotes(p)) }
+}
 
 // Posts a message points at, by quote embed or by a bsky.app link, as context entries: Jev
 // otherwise sees only a truncated URL.
@@ -153,13 +204,7 @@ async function linkedPosts(msg: Linking): Promise<Post[]> {
     }
   if (!uris.size) return []
   const { data } = await agent.getPosts({ uris: [...uris].slice(0, 5) })
-  return data.posts.map((p) => {
-    // Image descriptions, where the poster wrote them, stand in for the images.
-    const images = (p.embed as { images?: { alt?: string }[]; media?: { images?: { alt?: string }[] } } | undefined)
-    const alts = [...(images?.images ?? []), ...(images?.media?.images ?? [])].map((i) => i.alt?.trim()).filter(Boolean)
-    const text = stripHandles((p.record as { text?: string }).text ?? '')
-    return { author: `@${p.author.handle} (linked post)`, text: alts.length ? `${text}\n[image: ${alts.join('; ')}]` : text }
-  })
+  return Promise.all(data.posts.map((p) => asContext(p, ' (linked post)')))
 }
 // The question with bare links removed; a message that was only a link asks about the linked post.
 const withoutLinks = (text: string) => text.replace(/\S*bsky\.app\/profile\/\S+/g, '').trim()
@@ -199,13 +244,10 @@ async function threadContext(uri: string): Promise<Post[]> {
   let root: AppBskyFeedDefs.PostView | undefined
   if (rootUri) root = (await agent.getPosts({ uris: [rootUri] })).data.posts[0]
 
-  const toPost = (p: AppBskyFeedDefs.PostView): Post => ({
-    author: p.author.did === agent.session?.did ? 'you' : `@${p.author.handle}`,
-    text: stripHandles((p.record as { text?: string }).text ?? ''),
-  })
+  const toPost = (p: AppBskyFeedDefs.PostView) => asContext(p)
   // The root, from the chain if it reached it, else fetched separately.
-  const rootPost = root ? toPost(root) : chain.length ? toPost(chain[0]) : undefined
-  const rest = (root ? chain : chain.slice(1)).map(toPost)
+  const rootPost = root ? await toPost(root) : chain.length ? await toPost(chain[0]) : undefined
+  const rest = await Promise.all((root ? chain : chain.slice(1)).map(toPost))
   // Most recent posts that fit the caps, leaving one slot for the root.
   const kept: Post[] = []
   let chars = rootPost?.text.length ?? 0
@@ -237,7 +279,7 @@ async function pollMentions() {
     // An owner can add #full to get the full per-pick table in the trace image.
     const full = ownerDids.has(n.author.did) && /#full\b/i.test(record.text)
     const linked = await linkedPosts(n.record as Linking)
-    const asked = withoutLinks(stripHandles(record.text.replace(/#full\b/gi, '')))
+    const asked = withoutLinks(addressed(record.text.replace(/#full\b/gi, '')).replace(/^(@you\b[\s,:]*)+/i, '')).trim()
     const question = asked || (linked.length ? 'What do you make of the linked post?' : '')
     markHandled(n.uri)
     if (!question) continue
@@ -250,8 +292,10 @@ async function pollMentions() {
       continue
     }
     const thread = record.reply ? await threadContext(n.uri) : []
-    const context = [...thread, ...linked]
-    const t = await answer(question, context.length ? context : undefined)
+    // The question itself goes last, labelled with who asked it and with its images described.
+    const [view] = (await agent.getPosts({ uris: [n.uri] })).data.posts
+    const asker = view ? await asContext(view) : { author: `@${n.author.handle}`, text: question }
+    const t = await answer(question, [...thread, ...linked, asker])
     const image = containsBlocked(t.answer) ? undefined : await traceImage(t, full)
     const last = await post(headline(t), root, parent, image)
     if (!image) {
@@ -282,8 +326,9 @@ async function pollDms() {
         continue
       }
       const linked = await linkedPosts(msg)
-      const asked = withoutLinks(msg.text)
-      const t = await answer(asked || 'What do you make of the linked post?', linked.length ? linked : undefined)
+      const asked = withoutLinks(msg.text) || 'What do you make of the linked post?'
+      const handle = convo.members.find((m) => m.did === msg.sender.did)?.handle ?? 'someone'
+      const t = await answer(asked, [...linked, { author: `@${handle}`, text: msg.text }])
       await send(headline(t))
       for (const chunk of traceChunks(t, DM_LIMIT)) await send(chunk)
     }
