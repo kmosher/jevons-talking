@@ -5,7 +5,7 @@
 // continues along its most likely other option.
 //
 // Each finished draft is rated ("is this a good final answer?") inside the next step's call,
-// so rating is free. The search ends as soon as a draft rates at least `good`, or once the
+// so rating is free. A draft that only restates the question has its rating cut. The search ends as soon as a draft rates at least `good`, or once the
 // finished top `width` outrank every live branch or stop changing; the best-rated draft wins.
 //
 // Usage: npm run -s talk:beam -- [--q="..."] [--width=3] [--split=0.05] [--max-steps=40] [--scoring=mean|product] [--good=0.8] [--dry-run]
@@ -47,9 +47,18 @@ Several drafts of your answer are being written in parallel; each is a branch un
 with its own text and recent actions. Choose each branch's next option independently, as if that
 draft were the only one.`
 const MENU = { words: 150, common: 30, minWordsToSpeak: 1 }
+// A draft that uses no word the question didn't has its rating multiplied by this. Every word
+// counts, not just content words: "i am jev" answers "are you Jev?" by its change of person.
+const ECHO_PENALTY = 0.2
+const wordsOf = (text: string) => text.toLowerCase().match(/[a-z0-9']+/g) ?? []
+export const echoes = (draft: string, question: string) => {
+  const asked = new Set(wordsOf(question))
+  return wordsOf(draft).every((w) => asked.has(w) || asked.has(w.replace(/s$/, '')) || asked.has(`${w}s`))
+}
 // With a full set of finished drafts, stop if it hasn't changed in this many steps.
 const STALL_STEPS = 4
 const GOOD_ENOUGH = 0.8
+const DECENT = 0.4
 
 function distinctBy<T>(items: T[], key: (t: T) => string): T[] {
   const seen = new Set<string>()
@@ -93,7 +102,10 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
     }
     const r = await client.systemOne({ state, questions })
     calls++
-    drafts.forEach((d, i) => ratings.set(d, (r.answers[draftIds[i]] as { noul: number }).noul))
+    drafts.forEach((d, i) => {
+      const rating = (r.answers[draftIds[i]] as { noul: number }).noul
+      ratings.set(d, echoes(d, question) ? rating * ECHO_PENALTY : rating)
+    })
     return r.answers
   }
   const unrated = () => distinct(finished).map(branchText).filter((d) => !ratings.has(d))
@@ -152,7 +164,9 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
     const key = top.map(branchText).join('\n')
     stale = key === topKey ? stale + 1 : 0
     topKey = key
-    if (top.length >= width && (live.every((b) => rank(b) < rank(top.at(-1)!)) || stale >= STALL_STEPS)) break
+    // A stall only ends the search once some draft is decent; short junk drafts finish early,
+    // and stopping on them cut off longer answers still being written.
+    if (top.length >= width && (live.every((b) => rank(b) < rank(top.at(-1)!)) || (stale >= STALL_STEPS && bestRated() >= DECENT))) break
   }
 
   // Rate whatever finished since the last call, then take the best-rated draft.
