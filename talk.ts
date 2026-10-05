@@ -181,8 +181,11 @@ menu option. Options are:
 - "letter: X" — type a letter to narrow the word predictions to words starting with what you've typed
   (use this when the word you want is not among the predictions). Any letter or digit can be typed, so
   you can spell any word, then enter it as typed.
-- punctuation, "backspace" (undo the last letter typed, or else the last word), and "SPEAK" (finish:
-  your text is spoken aloud as your final answer).
+- "key: X" — type the punctuation mark X: every mark on a keyboard, plus — and …, and any mark can be
+  typed as often as you like.
+- "SPACE" — end the word you're typing, exactly as typed (after letters, punctuation or both).
+- "backspace" (undo the last character typed, or else the last word), and "SPEAK" (finish: your text is
+  spoken aloud as your final answer).
 recent_actions lists your last few picks. Options you already backspaced over from the current text
 are not offered again: if you're stuck, backspace further and rephrase.
 If conversation_so_far is present, the question is the latest message in that conversation; posts
@@ -250,6 +253,32 @@ export async function classify(
   const k = r.answers.keyboard as { choice: Keyboard; confidence: number } | undefined
   return { mode: a.choice, confidence: a.confidence, keyboard: k?.choice, keyboardConfidence: k?.confidence }
 }
+// Drops thread posts Jev rates irrelevant to the latest message, so stray topics (a horse joke five
+// posts up) don't leak into its word choices. Always kept: the latest message, the post it replies
+// to, Jev's own latest reply, linked posts, and gap markers. One call; a short thread is untouched.
+export const RELEVANT = 0.5
+export async function relevantContext(conversation: Post[]): Promise<{ kept: Post[]; dropped: Post[] }> {
+  const last = conversation.length - 1
+  const threadIdx = conversation.map((p, i) => i).filter((i) => i < last && !p_isLinked(conversation[i]))
+  const parent = threadIdx.at(-1)
+  const lastOwn = [...threadIdx].reverse().find((i) => conversation[i].author === 'you')
+  const always = new Set([last, parent, lastOwn].filter((i): i is number => i !== undefined))
+  const scored = threadIdx.filter((i) => !always.has(i) && conversation[i].author !== '…')
+  if (!scored.length) return { kept: conversation, dropped: [] }
+  const r = await jev().systemOne({
+    state: {
+      latest_message: conversation[last],
+      earlier_posts: Object.fromEntries(scored.map((i) => [`p${i}`, conversation[i]])),
+    },
+    questions: Object.fromEntries(
+      scored.map((i) => [`p${i}`, noul(`Is earlier post \`p${i}\` relevant to understanding or replying to the latest message?`)]),
+    ),
+  })
+  const keep = (i: number) => always.has(i) || !scored.includes(i) || (r.answers[`p${i}`] as { noul: number }).noul >= RELEVANT
+  return { kept: conversation.filter((_, i) => keep(i)), dropped: conversation.filter((_, i) => !keep(i)) }
+}
+const p_isLinked = (p: Post) => p.author.endsWith('(linked post)')
+
 const HISTORY = 10
 let client: TypeSafeClient | undefined
 export const jev = () => (client ??= new TypeSafeClient())
@@ -283,6 +312,9 @@ function topFollower(w: string): string | null {
   return followerCache.get(w)!
 }
 
+// Every punctuation mark on a US keyboard, plus en and em dashes and an ellipsis.
+const PUNCTUATION = [...'.,?!:;\'"-–—…()[]{}/\\&*@#$%^+=_~<>|`']
+
 export type MenuOptions = { words: number; common: number; minWordsToSpeak: number; phrases?: number; keyboard?: Keyboard }
 
 export const newBranch = (): Branch => ({ words: [], prefix: '', undo: [], rejected: new Map(), steps: [], rejections: 0, score: 1 })
@@ -294,7 +326,11 @@ export const cloneBranch = (b: Branch): Branch => ({
   steps: [...b.steps],
 })
 export const branchKey = (b: Branch) => `${b.words.join(' ')}|${b.prefix}`
-export const branchText = (b: Branch) => b.words.join(' ').replace(/ ([.,?])/g, '$1')
+// Words joined by spaces, except that a run of closing punctuation sticks to a preceding word that
+// ends in a letter or digit ("no." not "no ."), while punctuation-only words keep their spaces
+// ("... --- ...").
+export const branchText = (b: Branch) =>
+  b.words.reduce((text, w, i) => (i > 0 && /^[.,!?;:…)\]}%'"]+$/.test(w) && /[a-z0-9]$/i.test(b.words[i - 1]) ? text + w : text ? `${text} ${w}` : w), '')
 const reject = (b: Branch, key: string, option: string) => b.rejected.set(key, (b.rejected.get(key) ?? new Set()).add(option))
 
 export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
@@ -307,7 +343,8 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   }
   const { words, prefix } = b
   // A phrase is stored as one entry; predictions follow its last word.
-  const prev = words.length && !/[.,?]/.test(words.at(-1)!) ? words.at(-1)!.split(' ').at(-1)! : START
+  // After a punctuation-only word (or nothing), predictions start afresh, as at a sentence start.
+  const prev = words.length && /[a-z0-9]/i.test(words.at(-1)!) ? words.at(-1)!.split(' ').at(-1)!.replace(/[^a-z0-9']+$/i, '') : START
   const menu: Record<string, string> = {}
   const keyboard = o.keyboard ?? DEFAULT_KEYBOARD
   const predicted = predict(prev, prefix, o.words, o.common, keyboard)
@@ -328,8 +365,8 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   const letters = 'abcdefghijklmnopqrstuvwxyz0123456789'
   if (prefix && !isBlocked(prefix)) menu[`word: ${prefix}`] ??= `enter "${prefix}" as typed`
   for (const l of keyboard === 'letters' ? [...letters, ...PAIRS] : letters) menu[`letter: ${l}`] = `narrow predictions to words starting "${prefix + l}"`
-  // No punctuation straight after punctuation, so Jev can't stall on "no,.....".
-  if (!prefix && !/^[.,?]$/.test(words.at(-1) ?? '')) for (const p of ['.', ',', '?']) menu[p] = `append "${p}"`
+  for (const p of PUNCTUATION) menu[`key: ${p}`] = `type "${p}"`
+  if (prefix) menu.SPACE = `end the word "${prefix}" as typed`
   if (prefix || words.length) menu.backspace = prefix ? `delete the typed letter "${prefix.at(-1)}"` : `delete "${words.at(-1)}"`
   if (words.filter((w) => /\w/.test(w)).length >= o.minWordsToSpeak && !prefix) menu.SPEAK = 'finish and speak the text aloud'
   for (const opt of b.rejected.get(branchKey(b)) ?? []) delete menu[opt]
@@ -362,6 +399,11 @@ export function applyPick(b: Branch, pick: string) {
   }
   b.undo.push({ from: branchKey(b), option: pick })
   if (pick.startsWith('letter: ')) b.prefix += pick.slice(8)
+  else if (pick.startsWith('key: ')) b.prefix += pick.slice(5)
+  else if (pick === 'SPACE') {
+    if (b.prefix) b.words.push(b.prefix)
+    b.prefix = ''
+  }
   else if (pick.startsWith('word: ')) {
     b.words.push(pick.slice(6))
     b.prefix = ''

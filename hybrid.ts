@@ -5,7 +5,7 @@
 //
 // Usage: npm run -s talk:hybrid -- [--q="..."] [--good=0.35]
 import { type BeamTalk, beam, rateDrafts } from './beam.ts'
-import { classify, isBare, type Keyboard, type Mode, type Post, save, talk } from './talk.ts'
+import { classify, isBare, relevantContext, type Keyboard, type Mode, type Post, save, talk } from './talk.ts'
 
 const SINGLE_STEPS = 40
 // The single path's answer is kept if it rates at least this; otherwise the beam runs.
@@ -20,7 +20,16 @@ export type HybridOptions = { keyboard?: Keyboard; keyboardBy?: 'mode' | 'jev'; 
 export type HybridTalk = BeamTalk & { path: 'single' | 'beam'; mode: Mode; keyboard: Keyboard }
 
 export async function hybrid(question: string, opts: HybridOptions = {}): Promise<HybridTalk> {
-  const { conversation, good = HAND_OFF, log = () => {} } = opts
+  const { good = HAND_OFF, log = () => {} } = opts
+  // Thread posts Jev rates irrelevant to the latest message are dropped first (JEV_RELEVANCE=off keeps all).
+  let conversation = opts.conversation
+  let filterCalls = 0
+  if (conversation && conversation.length > 3 && process.env.JEV_RELEVANCE !== 'off') {
+    const { kept, dropped } = await relevantContext(conversation)
+    filterCalls = 1
+    conversation = kept
+    if (dropped.length) log(`dropped context: ${dropped.map((p) => `${p.author}: "${p.text.slice(0, 50)}"`).join(' | ')}`)
+  }
   // First, what kind of reply the message calls for and which keyboard to write it with: by
   // mode (acknowledgements and comebacks on the chat keyboard), or Jev's own choice.
   const keyboardBy = opts.keyboardBy ?? (process.env.JEV_KEYBOARD_BY === 'jev' ? 'jev' : 'mode')
@@ -59,7 +68,7 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
   const rating = single.answer ? ratings[pick] : 0
   // One call per pick and per final-answer check, plus the rating calls and the classification.
   const singleCalls =
-    drafts.reduce((n, d) => n + d.t.steps.length + d.t.steps.filter((s) => s.final !== undefined).length, 0) + drafts.length + (classified ? 1 : 0)
+    drafts.reduce((n, d) => n + d.t.steps.length + d.t.steps.filter((s) => s.final !== undefined).length, 0) + drafts.length + (classified ? 1 : 0) + filterCalls
   log(`single path: "${single.answer}" (${chosenKeyboard}) rated ${(rating * 100).toFixed(0)}% in ${singleCalls} calls`)
   const asSingle: HybridTalk = {
     ...single,
@@ -85,6 +94,8 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
     .slice(0, 3)
     .map(([d]) => d)
   const finalists = [...new Set([...drafts.map((d) => d.t.answer), ...beamBest])].filter(Boolean)
+  // Every draft came back empty: nothing to judge, so keep the single path's (empty) result.
+  if (!finalists.length) return { ...asSingle, calls: singleCalls + b.calls }
   const fresh = await rateDrafts(question, finalists, conversation, mode)
   const judged = Object.fromEntries(finalists.map((d, i) => [d, fresh[i]]))
   // Bare yes/no candidates under BARE_BAR are out, unless nothing else is left.
