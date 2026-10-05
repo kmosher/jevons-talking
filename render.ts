@@ -7,7 +7,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { Resvg } from '@resvg/resvg-js'
 import type { BeamTalk } from './beam.ts'
 import type { HybridTalk } from './hybrid.ts'
-import { meanConfidence, type Step, type Talk } from './talk.ts'
+import { applyPick, branchText, meanConfidence, newBranch, type Step, type Talk } from './talk.ts'
 
 const W = 1080
 const PAD = 40
@@ -24,26 +24,19 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…`
 // Rough advance width; good enough for sizing chips.
 const textWidth = (s: string, size: number) => [...s].reduce((w, ch) => w + (/[A-Z]/.test(ch) ? 0.72 : 0.56), 0) * size
 
-const label = (option: string) => (option === 'backspace' ? '⌫ delete' : option.replace(/^(word|letter): /, ''))
+const label = (option: string) => (option === 'backspace' ? '⌫ delete' : option.replace(/^(word|letter|key): /, ''))
 // A SPEAK that Jev then said wasn't final.
 const withdrawn = (step: Step) => step.pick === 'SPEAK' && step.final !== undefined && step.final < 0.5
 const kind = (option: string) =>
   option === 'SPEAK' ? 'speak' : option === 'backspace' ? 'backspace' : option.startsWith('letter: ') ? 'letter' : 'word'
 
-// The text (and any letters typed toward the next word) after each step, replaying talk()'s editing rules.
-function replay(steps: Step[]): { text: string; prefix: string }[] {
-  const words: string[] = []
-  let prefix = ''
+// The text (and any letters typed toward the next word) after each step, using talk()'s own editing
+// rules; `prefill` is text typed before the first pick (a yes-or-no verdict).
+function replay(steps: Step[], prefill: string[] = []): { text: string; prefix: string }[] {
+  const b = newBranch(prefill)
   return steps.map((s) => {
-    if (s.pick === 'backspace') {
-      if (prefix) prefix = prefix.slice(0, -1)
-      else words.pop()
-    } else if (s.pick.startsWith('letter: ')) prefix += s.pick.slice(8)
-    else if (s.pick.startsWith('word: ')) {
-      words.push(s.pick.slice(6))
-      prefix = ''
-    } else if (s.pick !== 'SPEAK') words.push(s.pick)
-    return { text: words.join(' ').replace(/ ([.,?])/g, '$1'), prefix }
+    if (s.pick !== 'SPEAK') applyPick(b, s.pick)
+    return { text: branchText(b), prefix: b.prefix }
   })
 }
 
@@ -100,7 +93,8 @@ function row(step: Step, i: number, after: { text: string; prefix: string }, y: 
 }
 
 export function renderSvg(t: Talk, { full = false } = {}): string {
-  const states = replay(t.steps)
+  const v = (t as Partial<HybridTalk>).decisions?.verdict
+  const states = replay(t.steps, v ? [v.word, ','] : [])
   let indices = t.steps.map((_, i) => i)
   let gapAfter = -1
   if (indices.length > MAX_ROWS) {
@@ -126,6 +120,7 @@ export function renderSvg(t: Talk, { full = false } = {}): string {
     const bits = [
       `mode: ${d.mode}${d.modeConfidence !== undefined ? ` ${Math.round(d.modeConfidence * 100)}%` : ''}`,
       ...(d.verdict ? [`verdict: ${d.verdict.word} (yes ${Math.round(d.verdict.yes * 100)}%)`] : []),
+      ...(d.contextWords?.some((w) => w.p >= 0.5) ? [`new words: ${d.contextWords.filter((w) => w.p >= 0.5).map((w) => w.word).join(', ')}`] : []),
       ...(d.contextTotal ? [`context: kept ${d.contextKept} of ${d.contextTotal} posts`] : []),
       ...d.images.map((img) => `saw: "${clip(img, full ? 200 : 60)}"`),
       ...(path ? [`path: ${path === 'beam' ? `beam → ${Object.keys((t as Partial<HybridTalk>).judged ?? {}).length} drafts` : 'single draft'}`] : []),

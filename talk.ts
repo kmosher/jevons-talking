@@ -27,7 +27,7 @@ import { chunkOf, dasherMenu } from './dasher.ts'
 export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number }
 export type Talk = { question: string; answer: string; finished: boolean; steps: Step[] }
 export type Post = { author: string; text: string }
-type Options = { keyboard?: Keyboard; mode?: Mode; phrases?: number; conversation?: Post[]; extraInstructions?: string; prefill?: string[]; minWordsToSpeak?: number; confirmSpeak?: boolean; maxRejections?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
+type Options = { keyboard?: Keyboard; mode?: Mode; phrases?: number; conversation?: Post[]; extraInstructions?: string; prefill?: string[]; extraWords?: string[]; minWordsToSpeak?: number; confirmSpeak?: boolean; maxRejections?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
 
 // --- Blocklist ---------------------------------------------------------------
 const blocked = new Set(
@@ -322,7 +322,7 @@ function topFollower(w: string): string | null {
 // Every punctuation mark on a US keyboard, plus en and em dashes and an ellipsis.
 const PUNCTUATION = [...'.,?!:;\'"-–—…()[]{}/\\&*@#$%^+=_~<>|`']
 
-export type MenuOptions = { words: number; common: number; minWordsToSpeak: number; phrases?: number; keyboard?: Keyboard }
+export type MenuOptions = { words: number; common: number; minWordsToSpeak: number; phrases?: number; keyboard?: Keyboard; extra?: string[] }
 
 export const newBranch = (words: string[] = []): Branch => ({ words: [...words], locked: words.length, prefix: '', undo: [], rejected: new Map(), steps: [], rejections: 0, score: 1 })
 export const cloneBranch = (b: Branch): Branch => ({
@@ -370,6 +370,8 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   }
   // Any letter or digit, like a real keyboard, so Jev can spell words the predictor doesn't know.
   const letters = 'abcdefghijklmnopqrstuvwxyz0123456789'
+  // Words from the conversation the predictor doesn't know (names, jargon), offered once they match.
+  for (const w of o.extra ?? []) if (w.startsWith(prefix)) menu[`word: ${w}`] ??= `append "${w}" (from the conversation)`
   // A lone letter is only a word if it's "a", "i" or a digit; otherwise committing it leaves a
   // stray "s" where Jev was heading for a word the predictions hadn't shown yet.
   const committable = prefix.length > 1 || /^[ai0-9]$/i.test(prefix)
@@ -426,12 +428,12 @@ export const recentActions = (b: Branch) => {
 }
 
 export async function talk(question: string, opts: Options = {}): Promise<Talk> {
-  const { keyboard = DEFAULT_KEYBOARD, mode = 'answer', phrases = 0, conversation, extraInstructions, prefill = [], minWordsToSpeak = 1, confirmSpeak = false, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
+  const { keyboard = DEFAULT_KEYBOARD, mode = 'answer', phrases = 0, conversation, extraInstructions, prefill = [], extraWords = [], minWordsToSpeak = 1, confirmSpeak = false, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
   client ??= new TypeSafeClient()
   const b = newBranch(prefill)
 
   for (let step = 0; step < maxSteps; step++) {
-    const menu = menuFor(b, { words: nWords, common, minWordsToSpeak: minWordsToSpeak + prefill.length, phrases, keyboard })
+    const menu = menuFor(b, { words: nWords, common, minWordsToSpeak: minWordsToSpeak + prefill.length, phrases, keyboard, extra: extraWords })
     const state = { instructions: extraInstructions ? `${instructionsFor(mode, keyboard)}\n${extraInstructions}` : instructionsFor(mode, keyboard), ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recentActions(b), text_so_far: branchText(b) || '(nothing yet)', letters_typed: b.prefix || '(none)' }
     const questions = { next: choice('Which menu option do you pick next?', menu) }
     if (dryRun) {
@@ -473,6 +475,27 @@ export function save(t: Talk): string {
 
 // A bare yes or no ("no", "no.", "no. no", "not"): allowed, but it has to clear a higher bar to win.
 export const isBare = (text: string) => /^\s*((yes|yep|yeah|no|nope|not|maybe)[\s.,?!]*)+$/i.test(text)
+
+// Words in the conversation the predictor has never seen ("femshep", a name, a coinage), so Jev
+// can pick them whole instead of spelling them. With judge, Jev keeps only the ones it might use.
+export const MAX_CONTEXT_WORDS = 30
+export function unfamiliarWords(texts: string[]): string[] {
+  const seen = new Set<string>()
+  for (const t of texts)
+    for (const m of t.replace(/[‘’]/g, "'").replace(/https?:\S+|@\S+|\[image: [^\]]*\]/g, ' ').toLowerCase().matchAll(/[a-z][a-z0-9'-]*[a-z0-9]/g)) {
+      const w = m[0]
+      if (w.length >= 3 && !unigram.has(w) && !containsBlocked(w)) seen.add(w)
+    }
+  return [...seen].slice(0, MAX_CONTEXT_WORDS)
+}
+export async function usefulWords(question: string, conversation: Post[] | undefined, words: string[]): Promise<{ word: string; p: number }[]> {
+  if (!words.length) return []
+  const r = await jev().systemOne({
+    state: { you: 'Jev, called JT on Bluesky', ...(conversation?.length ? { conversation_so_far: conversation } : {}), message: question, words },
+    questions: Object.fromEntries(words.map((w, i) => [`w${i}`, noul(`Might you use the word "${w}" in your reply to the message?`)])),
+  })
+  return words.map((word, i) => ({ word, p: (r.answers[`w${i}`] as { noul: number }).noul }))
+}
 
 // Jev's own verdict on a yes-or-no question, as the probability of yes. Asked fresh, without the
 // keyboard, so it is the plainest Jev output there is; JT then types the justification.

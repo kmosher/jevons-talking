@@ -5,7 +5,7 @@
 //
 // Usage: npm run -s talk:hybrid -- [--q="..."] [--good=0.35]
 import { type BeamTalk, beam, rateDrafts } from './beam.ts'
-import { classify, isBare, verdict, relevantContext, type Keyboard, type Mode, type Post, save, talk } from './talk.ts'
+import { classify, isBare, unfamiliarWords, usefulWords, verdict, relevantContext, type Keyboard, type Mode, type Post, save, talk } from './talk.ts'
 
 const SINGLE_STEPS = 40
 // The single path's answer is kept if it rates at least this; otherwise the beam runs.
@@ -18,7 +18,7 @@ const BARE_BAR = 0.6
 
 export type HybridOptions = { keyboard?: Keyboard; keyboardBy?: 'mode' | 'jev'; mode?: Mode; conversation?: Post[]; good?: number; log?: (line: string) => void }
 // What was decided before writing started, for the trace image.
-export type Decisions = { mode: Mode; modeConfidence?: number; verdict?: { yes: number; word: string }; contextTotal: number; contextKept: number; dropped: Post[]; images: string[] }
+export type Decisions = { mode: Mode; modeConfidence?: number; verdict?: { yes: number; word: string }; contextWords?: { word: string; p: number }[]; contextTotal: number; contextKept: number; dropped: Post[]; images: string[] }
 export type HybridTalk = BeamTalk & { path: 'single' | 'beam'; mode: Mode; keyboard: Keyboard; decisions: Decisions }
 
 export async function hybrid(question: string, opts: HybridOptions = {}): Promise<HybridTalk> {
@@ -58,8 +58,15 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
   const v = mode === 'yesno' ? await verdict(question, conversation) : undefined
   const prefill = v ? [v.word, ','] : []
   if (v) log(`verdict: ${v.word} (yes ${(v.yes * 100).toFixed(0)}%)`)
+  // Unfamiliar words from the conversation join the word menu: all of them, or (the default)
+  // only those Jev says it might use. JEV_CONTEXT_WORDS=all|judge|off.
+  const cwMode = process.env.JEV_CONTEXT_WORDS ?? 'judge'
+  const unfamiliar = cwMode === 'off' ? [] : unfamiliarWords([...(conversation ?? []).map((p) => p.text), question])
+  const contextWords = cwMode === 'judge' ? await usefulWords(question, conversation, unfamiliar) : unfamiliar.map((word) => ({ word, p: 1 }))
+  const extraWords = contextWords.filter((w) => w.p >= 0.5).map((w) => w.word)
+  if (unfamiliar.length) log(`context words: ${contextWords.map((w) => `${w.word} ${(w.p * 100).toFixed(0)}%`).join(', ')}`)
   // The single path gets fewer steps: if it hasn't finished by then, the beam is the better bet.
-  const write = (k: Keyboard) => talk(question, { keyboard: k, mode, conversation, prefill, maxSteps: SINGLE_STEPS, phrases: Number(process.env.JEV_PHRASES ?? 0), log })
+  const write = (k: Keyboard) => talk(question, { keyboard: k, mode, conversation, prefill, extraWords, maxSteps: SINGLE_STEPS, phrases: Number(process.env.JEV_PHRASES ?? 0), log })
   const drafts = [{ keyboard, t: await write(keyboard) }]
   let ratings = await rateDrafts(question, [drafts[0].t.answer || '…'], conversation, mode)
   // Salad guard: a draft the judge rates poorly, or one that spent a quarter of its picks
@@ -77,13 +84,14 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
   const rating = single.answer ? ratings[pick] : 0
   // One call per pick and per final-answer check, plus the rating calls and the classification.
   const singleCalls =
-    drafts.reduce((n, d) => n + d.t.steps.length + d.t.steps.filter((s) => s.final !== undefined).length, 0) + drafts.length + (classified ? 1 : 0) + (v ? 1 : 0) + filterCalls
+    drafts.reduce((n, d) => n + d.t.steps.length + d.t.steps.filter((s) => s.final !== undefined).length, 0) + drafts.length + (classified ? 1 : 0) + (v ? 1 : 0) + (cwMode === 'judge' && unfamiliar.length ? 1 : 0) + filterCalls
   log(`single path: "${single.answer}" (${chosenKeyboard}) rated ${(rating * 100).toFixed(0)}% in ${singleCalls} calls`)
   // The question itself is the last conversation entry, so it isn't counted as context.
   const decisions: Decisions = {
     mode,
     modeConfidence: classified?.confidence,
     verdict: v,
+    contextWords,
     contextTotal: Math.max(0, (opts.conversation?.length ?? 1) - 1),
     contextKept: Math.max(0, (conversation?.length ?? 1) - 1),
     dropped: droppedPosts,
@@ -106,7 +114,7 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
   if (!explore && rating >= (isBare(single.answer) ? BARE_BAR : good)) return asSingle
   if (explore) log(`exploring past "${single.answer}"`)
 
-  const b = await beam(question, { keyboard: chosenKeyboard, mode, conversation, prefill, seed: drafts.map((d) => d.t.answer).filter(Boolean), log })
+  const b = await beam(question, { keyboard: chosenKeyboard, mode, conversation, prefill, extraWords, seed: drafts.map((d) => d.t.answer).filter(Boolean), log })
   // The final pick is a fresh rating of the single answer and the beam's best drafts.
   const beamBest = Object.entries(b.judged ?? {})
     .filter(([d]) => d !== single.answer && b.draftSteps?.[d])
