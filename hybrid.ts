@@ -26,8 +26,15 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
   const keyboardBy = opts.keyboardBy ?? (process.env.JEV_KEYBOARD_BY === 'jev' ? 'jev' : 'mode')
   const classified = opts.mode ? null : await classify(question, conversation, keyboardBy === 'jev')
   const mode = opts.mode ?? classified!.mode
+  // JEV_ROUTING=off keeps everything on the words keyboard.
   const keyboard: Keyboard =
-    keyboardBy === 'jev' && classified?.keyboard ? classified.keyboard : mode === 'acknowledge' || mode === 'comeback' ? 'letters' : 'words'
+    process.env.JEV_ROUTING === 'off'
+      ? 'words'
+      : keyboardBy === 'jev' && classified?.keyboard
+        ? classified.keyboard
+        : mode === 'acknowledge' || mode === 'comeback'
+          ? 'letters'
+          : 'words'
   log(
     `mode: ${mode}${classified ? ` (${(classified.confidence * 100).toFixed(0)}%)` : ''}, keyboard: ${keyboard}` +
       (classified?.keyboardConfidence !== undefined ? ` (Jev's pick, ${(classified.keyboardConfidence * 100).toFixed(0)}%)` : ''),
@@ -39,7 +46,7 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
   // Salad guard: a draft the judge rates poorly, or one that spent a quarter of its picks
   // deleting, gets a second draft on the other keyboard, and the better one goes forward.
   const deletes = drafts[0].t.steps.filter((s) => s.pick === 'backspace').length / (drafts[0].t.steps.length || 1)
-  if (ratings[0] < SALAD_RATING || deletes > SALAD_DELETES) {
+  if (process.env.JEV_SALAD_GUARD !== 'off' && (ratings[0] < SALAD_RATING || deletes > SALAD_DELETES)) {
     const other: Keyboard = keyboard === 'words' ? 'letters' : 'words'
     log(`salad guard: "${drafts[0].t.answer}" rated ${(ratings[0] * 100).toFixed(0)}%, ${(deletes * 100).toFixed(0)}% deletes; trying ${other}`)
     drafts.push({ keyboard: other, t: await write(other) })
