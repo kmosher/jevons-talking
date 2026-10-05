@@ -80,11 +80,11 @@ if (process.env.JEV_CONTRACTIONS !== 'off')
 
 // The "chat" table adds Peter Norvig's web-scale word-pair counts (count_2w.txt, from Google's
 // Web 1T corpus; downloaded once to ~/.cache/jevons-talking, or JEV_NORVIG_PAIRS), scaled so its
-// biggest pair matches WordNet's biggest. JEV_NORVIG=off leaves it the same as the base table.
+// biggest pair matches WordNet's biggest. Opt-in with JEV_NORVIG=on; otherwise it's the base table.
 const chatBigram = new Map<string, Map<string, number>>([...bigram].map(([k, m]) => [k, new Map(m)]))
 const NORVIG_URL = 'https://norvig.com/ngrams/count_2w.txt'
 const norvigPath = process.env.JEV_NORVIG_PAIRS ?? join(homedir(), '.cache', 'jevons-talking', 'count_2w.txt')
-if (process.env.JEV_NORVIG !== 'off') {
+if (process.env.JEV_NORVIG === 'on') {
   if (!existsSync(norvigPath)) {
     mkdirSync(dirname(norvigPath), { recursive: true })
     writeFileSync(norvigPath, await (await fetch(NORVIG_URL)).text())
@@ -109,10 +109,10 @@ if (process.env.JEV_NORVIG !== 'off') {
 }
 
 // Words are ranked (for the common slots, backoff and completions) by Android's keyboard
-// frequencies from AOSP LatinIME, in data/; JEV_RANKING=wordnet ranks by WordNet counts instead.
+// frequencies from AOSP LatinIME, in data/, with JEV_RANKING=aosp; by default, by WordNet counts.
 const AOSP = process.env.JEV_AOSP_WORDLIST ?? fileURLToPath(new URL('data/aosp_en_US_wordlist.combined.gz', import.meta.url))
 const byFrequency =
-  process.env.JEV_RANKING !== 'wordnet' && existsSync(AOSP)
+  process.env.JEV_RANKING === 'aosp' && existsSync(AOSP)
     ? (() => {
         const raw = readFileSync(AOSP)
         const text = AOSP.endsWith('.gz') ? gunzipSync(raw).toString('utf8') : raw.toString('utf8')

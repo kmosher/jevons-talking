@@ -33,12 +33,13 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
   // First, what kind of reply the message calls for and which keyboard to write it with: by
   // mode (acknowledgements and comebacks on the chat keyboard), or Jev's own choice.
   const keyboardBy = opts.keyboardBy ?? (process.env.JEV_KEYBOARD_BY === 'jev' ? 'jev' : 'mode')
-  const classified = opts.mode ? null : await classify(question, conversation, keyboardBy === 'jev')
+  const classified = opts.mode ? null : await classify(question, conversation, keyboardBy === 'jev' && process.env.JEV_ROUTING === 'on')
   const mode = opts.mode ?? classified!.mode
-  // JEV_ROUTING=off keeps everything on the words keyboard.
+  // Everything is written on the words keyboard unless JEV_ROUTING=on (keyboard by mode, or by
+  // Jev with JEV_KEYBOARD_BY=jev).
   const keyboard: Keyboard = opts.keyboard
     ? opts.keyboard
-    : process.env.JEV_ROUTING === 'off'
+    : process.env.JEV_ROUTING !== 'on'
       ? 'words'
       : keyboardBy === 'jev' && classified?.keyboard
         ? classified.keyboard
