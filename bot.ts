@@ -300,6 +300,8 @@ async function missedReplies(): Promise<Incoming[]> {
   return out
 }
 
+const failures = new Map<string, number>()
+const MAX_TRIES = 3
 async function pollMentions() {
   const { data } = await agent.listNotifications({ reasons: ['mention', 'reply'], limit: 50 })
   const seen = new Set(data.notifications.map((n) => n.uri))
@@ -335,16 +337,27 @@ async function pollMentions() {
       if (admitted === 'warn') await post(LIMIT_REPLY, root, parent)
       continue
     }
-    const thread = record.reply ? await threadContext(n.uri) : []
-    // The question itself goes last, labelled with who asked it and with its images described.
-    const [view] = (await agent.getPosts({ uris: [n.uri] })).data.posts
-    const asker = view ? await asContext(view) : { author: `@${n.author.handle}`, text: question }
-    const t = await answer(question, [...thread, ...linked, asker])
-    const image = containsBlocked(t.answer) ? undefined : await traceImage(t, full)
-    const last = await post(headline(t), root, parent, image)
-    if (!image) {
-      let prev = last
-      for (const chunk of traceChunks(t, POST_LIMIT)) prev = await post(chunk, root, prev)
+    try {
+      const thread = record.reply ? await threadContext(n.uri) : []
+      // The question itself goes last, labelled with who asked it and with its images described.
+      const [view] = (await agent.getPosts({ uris: [n.uri] })).data.posts
+      const asker = view ? await asContext(view) : { author: `@${n.author.handle}`, text: question }
+      const t = await answer(question, [...thread, ...linked, asker])
+      const image = containsBlocked(t.answer) ? undefined : await traceImage(t, full)
+      const last = await post(headline(t), root, parent, image)
+      if (!image) {
+        let prev = last
+        for (const chunk of traceChunks(t, POST_LIMIT)) prev = await post(chunk, root, prev)
+      }
+    } catch (e) {
+      // A failed reply (a Jev 503, a Bluesky hiccup) is retried on the next polls, a few times.
+      const tries = (failures.get(n.uri) ?? 0) + 1
+      failures.set(n.uri, tries)
+      log(`reply failed (try ${tries} of ${MAX_TRIES}) for @${n.author.handle}:`, e instanceof Error ? e.message : e)
+      if (tries < MAX_TRIES) {
+        handled.delete(n.uri)
+        saveState()
+      }
     }
   }
   await agent.updateSeenNotifications()

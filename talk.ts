@@ -305,7 +305,23 @@ const p_isLinked = (p: Post) => p.author.endsWith('(linked post)')
 
 const HISTORY = 10
 let client: TypeSafeClient | undefined
-export const jev = () => (client ??= new TypeSafeClient())
+// The SDK's timeout covers the response arriving, not reading its body, and a stalled body
+// once hung the bot for good. Every call gets a hard deadline and one retry.
+const CALL_DEADLINE_MS = 45_000
+function newClient(): TypeSafeClient {
+  const c = new TypeSafeClient()
+  const call = c.systemOne.bind(c)
+  const once = (...args: Parameters<typeof call>) => {
+    let timer: NodeJS.Timeout | undefined
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Jev call exceeded ${CALL_DEADLINE_MS / 1000}s`)), CALL_DEADLINE_MS)
+    })
+    return Promise.race([call(...args), deadline]).finally(() => clearTimeout(timer))
+  }
+  c.systemOne = ((...args: Parameters<typeof call>) => once(...args).catch(() => once(...args))) as typeof c.systemOne
+  return c
+}
+export const jev = () => (client ??= newClient())
 
 // One draft in progress: its text, the letters typed toward the next word, and what it has rejected.
 export type Branch = {
@@ -448,7 +464,7 @@ export const recentActions = (b: Branch) => {
 
 export async function talk(question: string, opts: Options = {}): Promise<Talk> {
   const { keyboard = DEFAULT_KEYBOARD, mode = 'answer', phrases = 0, conversation, extraInstructions, prefill = [], extraWords = [], minWordsToSpeak = 1, confirmSpeak = false, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
-  client ??= new TypeSafeClient()
+  client ??= newClient()
   const b = newBranch(prefill)
 
   for (let step = 0; step < maxSteps; step++) {
