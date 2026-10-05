@@ -19,6 +19,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { choice, noul, TypeSafeClient } from '@typesafe-ai/sdk'
+import { chunkOf, dasherMenu } from './dasher.ts'
 
 export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number }
 export type Talk = { question: string; answer: string; finished: boolean; steps: Step[] }
@@ -65,13 +66,35 @@ const CONVERSATION_WEIGHT = 500
 for (const line of readFileSync(new URL('conversation.txt', import.meta.url), 'utf8').split('\n')) {
   if (line.trim() && !line.startsWith('#')) count(line.toLowerCase(), CONVERSATION_WEIGHT)
 }
-const byFrequency = [...unigram.entries()].sort((a, b) => b[1] - a[1]).map(([w]) => w)
+// JEV_AOSP_WORDLIST=<path to an AOSP LatinIME *_wordlist.combined> ranks words by Android's
+// keyboard frequencies instead of WordNet's, for the common slots, backoff and completions.
+const AOSP = process.env.JEV_AOSP_WORDLIST
+const byFrequency = AOSP
+  ? (() => {
+      const f = new Map<string, number>()
+      for (const m of readFileSync(AOSP, 'utf8').matchAll(/word=([^,]+),f=(\d+)/g)) {
+        const w = m[1].toLowerCase()
+        if (/^[a-z]+(?:'[a-z]+)?$/.test(w) && !isBlocked(w)) f.set(w, Math.max(f.get(w) ?? 0, Number(m[2])))
+      }
+      return [...f.entries()].sort((a, b) => b[1] - a[1]).map(([w]) => w)
+    })()
+  : [...unigram.entries()].sort((a, b) => b[1] - a[1]).map(([w]) => w)
 
 // The `common` most frequent words matching the typed prefix, then bigram
 // continuations of `prev`, then unigram backoff to fill `n` slots.
 // JEV_PREDICTOR=completion turns prediction off until Jev types a letter, then offers only the
 // most frequent words starting with what it typed: a plain keyboard with completions.
 const COMPLETION_ONLY = process.env.JEV_PREDICTOR === 'completion'
+// JEV_PREDICTOR=dasher swaps the whole keyboard for the Dasher-style character model in dasher.ts.
+const DASHER = process.env.JEV_PREDICTOR === 'dasher'
+// JEV_PAIRS=N also offers the N most frequent two-letter combinations (by word frequency) as keys.
+const PAIRS: string[] = (() => {
+  const n = Number(process.env.JEV_PAIRS ?? 0)
+  if (!n) return []
+  const counts = new Map<string, number>()
+  for (const [w, c] of unigram) for (let i = 0; i + 1 < w.length; i++) if (/^[a-z]{2}$/.test(w.slice(i, i + 2))) counts.set(w.slice(i, i + 2), (counts.get(w.slice(i, i + 2)) ?? 0) + c)
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([p]) => p)
+})()
 
 function predict(prev: string, prefix: string, n: number, common: number): string[] {
   if (COMPLETION_ONLY) return prefix ? byFrequency.filter((w) => w.startsWith(prefix)).slice(0, n) : []
@@ -129,7 +152,10 @@ export const MODES = {
   },
 } as const
 export type Mode = keyof typeof MODES
-export const instructionsFor = (mode: Mode = 'answer') => `${instructions}\n${MODES[mode].instruction}`
+const DASHER_NOTE = `This keyboard is different: every option is "type: X", which types the characters X (␣ is a space,
+"space" types one), with the chance a typical writer would type it next. End each word with a space; SPEAK is
+offered once the last word is finished.`
+export const instructionsFor = (mode: Mode = 'answer') => `${instructions}\n${DASHER ? `${DASHER_NOTE}\n` : ''}${MODES[mode].instruction}`
 
 // One choice call: which kind of reply the message calls for.
 export async function classify(question: string, conversation?: Post[]): Promise<{ mode: Mode; confidence: number }> {
@@ -193,6 +219,13 @@ export const branchText = (b: Branch) => b.words.join(' ').replace(/ ([.,?])/g, 
 const reject = (b: Branch, key: string, option: string) => b.rejected.set(key, (b.rejected.get(key) ?? new Set()).add(option))
 
 export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
+  if (DASHER) {
+    const menu = dasherMenu(`${branchText(b)}${b.words.length ? ' ' : ''}${b.prefix}`)
+    if (b.prefix || b.words.length) menu.backspace = 'delete the last character'
+    if (b.words.length && !b.prefix) menu.SPEAK = 'finish and speak the text aloud'
+    for (const opt of b.rejected.get(branchKey(b)) ?? []) delete menu[opt]
+    return menu
+  }
   const { words, prefix } = b
   // A phrase is stored as one entry; predictions follow its last word.
   const prev = words.length && !/[.,?]/.test(words.at(-1)!) ? words.at(-1)!.split(' ').at(-1)! : START
@@ -214,7 +247,7 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   // Any letter or digit, like a real keyboard, so Jev can spell words the predictor doesn't know.
   const letters = 'abcdefghijklmnopqrstuvwxyz0123456789'
   if (prefix && !isBlocked(prefix)) menu[`word: ${prefix}`] ??= `enter "${prefix}" as typed`
-  for (const l of letters) menu[`letter: ${l}`] = `narrow predictions to words starting "${prefix + l}"`
+  for (const l of [...letters, ...PAIRS]) menu[`letter: ${l}`] = `narrow predictions to words starting "${prefix + l}"`
   // No punctuation straight after punctuation, so Jev can't stall on "no,.....".
   if (!prefix && !/^[.,?]$/.test(words.at(-1) ?? '')) for (const p of ['.', ',', '?']) menu[p] = `append "${p}"`
   if (prefix || words.length) menu.backspace = prefix ? `delete the typed letter "${prefix.at(-1)}"` : `delete "${words.at(-1)}"`
@@ -229,7 +262,22 @@ export function applyPick(b: Branch, pick: string) {
     const last = b.undo.pop()
     if (last) reject(b, last.from, last.option)
     if (b.prefix) b.prefix = b.prefix.slice(0, -1)
-    else b.words.pop()
+    else if (DASHER) {
+      // Character by character: deleting the space after a word reopens that word.
+      const w = b.words.pop()
+      if (w && !/^[.,?]$/.test(w)) b.prefix = w
+    } else b.words.pop()
+    return
+  }
+  if (pick.startsWith('type: ')) {
+    b.undo.push({ from: branchKey(b), option: pick })
+    for (const ch of chunkOf(pick)) {
+      if (ch === ' ' || /[.,?]/.test(ch)) {
+        if (b.prefix) b.words.push(b.prefix)
+        b.prefix = ''
+        if (ch !== ' ') b.words.push(ch)
+      } else b.prefix += ch
+    }
     return
   }
   b.undo.push({ from: branchKey(b), option: pick })
