@@ -7,6 +7,9 @@
 // is always on offer even after a word with many followers. Words in blocklist.txt
 // are never offered and can't be entered by spelling them out.
 //
+// When Jev picks SPEAK, a yes/no question asks whether that's its final answer; a "no"
+// withdraws SPEAK at that point and Jev keeps going, up to maxRejections times.
+//
 // Each call sees its last few actions, and an option it later backspaced over is
 // removed from that menu, so a stateless Jev can't loop on the same dead end.
 //
@@ -14,12 +17,12 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
-import { choice, TypeSafeClient } from '@typesafe-ai/sdk'
+import { choice, noul, TypeSafeClient } from '@typesafe-ai/sdk'
 
-export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number> }
+export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number }
 export type Talk = { question: string; answer: string; finished: boolean; steps: Step[] }
 export type Post = { author: string; text: string }
-type Options = { conversation?: Post[]; extraInstructions?: string; minWordsToSpeak?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
+type Options = { conversation?: Post[]; extraInstructions?: string; minWordsToSpeak?: number; confirmSpeak?: boolean; maxRejections?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
 
 // --- Blocklist ---------------------------------------------------------------
 const blocked = new Set(
@@ -92,7 +95,7 @@ const HISTORY = 10
 let client: TypeSafeClient | undefined
 
 export async function talk(question: string, opts: Options = {}): Promise<Talk> {
-  const { conversation, extraInstructions, minWordsToSpeak = 1, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
+  const { conversation, extraInstructions, minWordsToSpeak = 1, confirmSpeak = true, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
   client ??= new TypeSafeClient()
   const words: string[] = []
   let prefix = ''
@@ -100,6 +103,7 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
   const undo: { from: string; option: string }[] = []
   const rejected = new Map<string, Set<string>>()
   const steps: Step[] = []
+  let rejections = 0
   const key = () => `${words.join(' ')}|${prefix}`
   const text = () => words.join(' ').replace(/ ([.,?])/g, '$1')
 
@@ -128,7 +132,18 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
     steps.push({ menu: Object.keys(menu), pick: a.choice, confidence: a.confidence, probabilities: a.probabilities })
     log(`${String(step + 1).padStart(2)} ${a.choice.padEnd(16)} conf=${a.confidence.toFixed(2)}  | ${text()}${prefix ? ' ' + prefix + '…' : ''}`)
 
-    if (a.choice === 'SPEAK') break
+    if (a.choice === 'SPEAK') {
+      if (!confirmSpeak || rejections >= maxRejections) break
+      // A second opinion on stopping: a "no" withdraws SPEAK from this point and Jev carries on.
+      const c = await client.systemOne({ state: { ...state, text_so_far: text() }, questions: { final: noul('Is the text so far your final answer?') } })
+      const final = (c.answers.final as { noul: number }).noul
+      steps.at(-1)!.final = final
+      log(`   final answer? ${final.toFixed(2)}`)
+      if (final >= 0.5) break
+      rejected.set(key(), (rejected.get(key()) ?? new Set()).add('SPEAK'))
+      rejections++
+      continue
+    }
     if (a.choice === 'backspace') {
       const last = undo.pop()
       if (last) rejected.set(last.from, (rejected.get(last.from) ?? new Set()).add(last.option))
@@ -143,7 +158,8 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
       prefix = ''
     } else words.push(a.choice)
   }
-  return { question, answer: text(), finished: steps.at(-1)?.pick === 'SPEAK', steps }
+  const last = steps.at(-1)
+  return { question, answer: text(), finished: last?.pick === 'SPEAK' && (last.final ?? 1) >= 0.5, steps }
 }
 
 export function save(t: Talk): string {

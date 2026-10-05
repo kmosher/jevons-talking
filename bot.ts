@@ -10,7 +10,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { AppBskyFeedDefs, AtpAgent, RichText } from '@atproto/api'
 import { renderPng } from './render.ts'
-import { containsBlocked, meanConfidence, type Post, save, type Talk, talk } from './talk.ts'
+import { containsBlocked, meanConfidence, type Post, save, type Step, type Talk, talk } from './talk.ts'
 
 const HANDLE = process.env.BLUESKY_HANDLE ?? 'jevons-talking.bsky.social'
 const PASSWORD = process.env.BLUESKY_APP_PASSWORD
@@ -42,8 +42,12 @@ const log = (...a: unknown[]) => console.log(new Date().toISOString(), ...a)
 log(`logged in as ${HANDLE}; answering ${ALLOWED.join(', ')}`)
 
 // --- Formatting ----------------------------------------------------------------
-const pickLabel = (pick: string) =>
-  pick === 'backspace' ? '⌫' : pick === 'SPEAK' ? '🔊' : pick.replace(/^(word|letter): /, '')
+const pickLabel = (step: Step) =>
+  step.pick === 'backspace'
+    ? '⌫'
+    : step.pick === 'SPEAK'
+      ? step.final !== undefined && step.final < 0.5 ? '🔊✗' : '🔊'
+      : step.pick.replace(/^(word|letter): /, '')
 
 function headline(t: Talk): string {
   if (containsBlocked(t.answer)) return '(Jev composed something I won’t post.)'
@@ -56,7 +60,7 @@ function headline(t: Talk): string {
 function traceChunks(t: Talk, limit: number): string[] {
   const chunks: string[] = []
   let cur = 'Picks:'
-  for (const label of t.steps.map((s) => pickLabel(s.pick))) {
+  for (const label of t.steps.map(pickLabel)) {
     if (cur.length + 1 + label.length > limit) {
       chunks.push(cur)
       cur = label

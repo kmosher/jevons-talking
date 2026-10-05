@@ -22,6 +22,8 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…`
 const textWidth = (s: string, size: number) => [...s].reduce((w, ch) => w + (/[A-Z]/.test(ch) ? 0.72 : 0.56), 0) * size
 
 const label = (option: string) => (option === 'backspace' ? '⌫ delete' : option.replace(/^(word|letter): /, ''))
+// A SPEAK that Jev then said wasn't final.
+const withdrawn = (step: Step) => step.pick === 'SPEAK' && step.final !== undefined && step.final < 0.5
 const kind = (option: string) =>
   option === 'SPEAK' ? 'speak' : option === 'backspace' ? 'backspace' : option.startsWith('letter: ') ? 'letter' : 'word'
 
@@ -65,7 +67,7 @@ function row(step: Step, i: number, after: { text: string; prefix: string }, y: 
     backspace: { fill: '#fff', ink: C.red, stroke: C.red, bold: true },
     speak: { fill: C.ink, ink: '#fff', bold: true },
   }[k]
-  const pick = chip(PAD + 36, y, clip(label(step.pick), 16), style)
+  const pick = chip(PAD + 36, y, clip(withdrawn(step) ? `final? ${Math.round(step.final! * 100)}% ✗` : label(step.pick), 18), withdrawn(step) ? { fill: '#fff', ink: C.ink, stroke: C.ink, bold: true } : style)
   parts.push(pick.svg)
   parts.push(`<rect x="${PAD + 36}" y="${y + 29}" width="${pick.w}" height="3" rx="1.5" fill="${C.line}"/>`)
   parts.push(`<rect x="${PAD + 36}" y="${y + 29}" width="${pick.w * step.confidence}" height="3" rx="1.5" fill="${C.ink}"/>`)
@@ -117,15 +119,15 @@ export function renderSvg(t: Talk): string {
   const strip: string[] = []
   for (const step of t.steps) {
     const k = kind(step.pick)
-    const text = k === 'backspace' ? '⌫' : label(step.pick)
+    const text = k === 'backspace' ? '⌫' : withdrawn(step) ? 'SPEAK?✗' : label(step.pick)
     const w = textWidth(text, 14) + 12
     if (x + w > W - PAD) {
       x = PAD
       y += 26
     }
-    const fill = { word: C.orange, letter: '#fff', backspace: '#fff', speak: C.ink }[k]
-    const ink = { word: '#fff', letter: C.orange, backspace: C.red, speak: '#fff' }[k]
-    const stroke = k === 'letter' ? C.orange : k === 'backspace' ? C.red : fill
+    const fill = withdrawn(step) ? '#fff' : { word: C.orange, letter: '#fff', backspace: '#fff', speak: C.ink }[k]
+    const ink = withdrawn(step) ? C.ink : { word: '#fff', letter: C.orange, backspace: C.red, speak: '#fff' }[k]
+    const stroke = k === 'letter' ? C.orange : k === 'backspace' ? C.red : withdrawn(step) ? C.ink : fill
     strip.push(`<rect x="${x}" y="${y}" width="${w}" height="21" rx="5" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`)
     strip.push(`<text x="${x + w / 2}" y="${y + 15}" font-family="${k === 'letter' ? MONO : SANS}" font-size="14" font-weight="700" fill="${ink}" text-anchor="middle">${esc(text)}</text>`)
     x += w + 4
