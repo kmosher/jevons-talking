@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@atproto/api": "^0.21.0",
+    "@resvg/resvg-js": "^2.6.2",
     "@typesafe-ai/sdk": "^0.6.0",
     "tsx": "^4.23.15",
     "wordnet-db": "^3.1.14"
