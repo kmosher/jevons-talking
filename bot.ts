@@ -139,9 +139,9 @@ async function post(text: string, root: Ref, parent: Ref, embed?: { $type: strin
 }
 
 // The trace as an image embed, re-rendered smaller if it's over Bluesky's size limit.
-async function traceImage(t: Talk) {
-  let img = renderPng(t, 2)
-  for (const zoom of [1.5, 1]) if (img.png.length > IMAGE_LIMIT) img = renderPng(t, zoom)
+async function traceImage(t: Talk, full = false) {
+  let img = renderPng(t, 2, full)
+  for (const zoom of [1.5, 1]) if (img.png.length > IMAGE_LIMIT) img = renderPng(t, zoom, full)
   if (img.png.length > IMAGE_LIMIT) return undefined
   const { data } = await agent.uploadBlob(img.png, { encoding: 'image/png' })
   const alt = traceChunks(t, 100_000)[0].slice(0, 1900)
@@ -202,7 +202,9 @@ async function pollMentions() {
       markHandled(n.uri)
       continue
     }
-    const question = stripHandles(record.text)
+    // An owner can add #full to get the full per-pick table in the trace image.
+    const full = ownerDids.has(n.author.did) && /#full\b/i.test(record.text)
+    const question = stripHandles(record.text.replace(/#full\b/gi, ''))
     markHandled(n.uri)
     if (!question) continue
     const parent = { uri: n.uri, cid: n.cid }
@@ -215,7 +217,7 @@ async function pollMentions() {
     }
     const context = record.reply ? await threadContext(n.uri) : undefined
     const t = await answer(question, context)
-    const image = containsBlocked(t.answer) ? undefined : await traceImage(t)
+    const image = containsBlocked(t.answer) ? undefined : await traceImage(t, full)
     const last = await post(headline(t), root, parent, image)
     if (!image) {
       let prev = last

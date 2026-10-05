@@ -7,8 +7,8 @@
 // is always on offer even after a word with many followers. Words in blocklist.txt
 // are never offered and can't be entered by spelling them out.
 //
-// When Jev picks SPEAK, a yes/no question asks whether that's its final answer; a "no"
-// withdraws SPEAK at that point and Jev keeps going, up to maxRejections times.
+// With confirmSpeak, picking SPEAK prompts a yes/no question asking whether that's Jev's final
+// answer; a "no" withdraws SPEAK at that point and Jev keeps going, up to maxRejections times.
 //
 // Each call sees its last few actions, and an option it later backspaced over is
 // removed from that menu, so a stateless Jev can't loop on the same dead end.
@@ -160,7 +160,7 @@ export const recentActions = (b: Branch) => {
 }
 
 export async function talk(question: string, opts: Options = {}): Promise<Talk> {
-  const { conversation, extraInstructions, minWordsToSpeak = 1, confirmSpeak = true, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
+  const { conversation, extraInstructions, minWordsToSpeak = 1, confirmSpeak = false, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
   client ??= new TypeSafeClient()
   const b = newBranch()
 
@@ -187,6 +187,9 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
       if (final >= 0.5) break
       reject(b, branchKey(b), 'SPEAK')
       b.rejections++
+      // With no checks left, SPEAK is open again everywhere; leaving old blocks in place sent
+      // Jev on detours, deleting words just to reach a text it was allowed to finish.
+      if (b.rejections >= maxRejections) for (const set of b.rejected.values()) set.delete('SPEAK')
       continue
     }
     applyPick(b, a.choice)
