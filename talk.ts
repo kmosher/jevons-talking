@@ -19,7 +19,7 @@ import { choice, TypeSafeClient } from '@typesafe-ai/sdk'
 export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number> }
 export type Talk = { question: string; answer: string; finished: boolean; steps: Step[] }
 export type Post = { author: string; text: string }
-type Options = { conversation?: Post[]; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
+type Options = { conversation?: Post[]; extraInstructions?: string; minWordsToSpeak?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
 
 // --- Blocklist ---------------------------------------------------------------
 const blocked = new Set(
@@ -79,7 +79,8 @@ communication menu. You cannot type freely: each turn you pick exactly one
 menu option. Options are:
 - "word: X" — append the predicted word X to your sentence.
 - "letter: X" — type a letter to narrow the word predictions to words starting with what you've typed
-  (use this when the word you want is not among the predictions). Digits work the same way.
+  (use this when the word you want is not among the predictions). Any letter or digit can be typed, so
+  you can spell any word, then enter it as typed.
 - punctuation, "backspace" (undo the last letter typed, or else the last word), and "SPEAK" (finish:
   your text is spoken aloud as your final answer).
 recent_actions lists your last few picks. Options you already backspaced over from the current text
@@ -91,7 +92,7 @@ const HISTORY = 10
 let client: TypeSafeClient | undefined
 
 export async function talk(question: string, opts: Options = {}): Promise<Talk> {
-  const { conversation, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
+  const { conversation, extraInstructions, minWordsToSpeak = 1, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
   client ??= new TypeSafeClient()
   const words: string[] = []
   let prefix = ''
@@ -106,17 +107,17 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
     const prev = words.length && !/[.,?]/.test(words.at(-1)!) ? words.at(-1)! : START
     const menu: Record<string, string> = {}
     for (const w of predict(prev, prefix, nWords, common)) menu[`word: ${w}`] = `append "${w}"`
-    const letters = new Set(byFrequency.filter((w) => w.startsWith(prefix) && w.length > prefix.length).map((w) => w[prefix.length]))
-    if (/^\d*$/.test(prefix)) for (const d of '0123456789') letters.add(d)
+    // Any letter or digit, like a real keyboard, so Jev can spell words the predictor doesn't know.
+    const letters = 'abcdefghijklmnopqrstuvwxyz0123456789'
     if (prefix && !isBlocked(prefix)) menu[`word: ${prefix}`] ??= `enter "${prefix}" as typed`
-    for (const l of [...letters].sort()) menu[`letter: ${l}`] = `narrow predictions to words starting "${prefix + l}"`
+    for (const l of letters) menu[`letter: ${l}`] = `narrow predictions to words starting "${prefix + l}"`
     if (!prefix) for (const p of ['.', ',', '?']) menu[p] = `append "${p}"`
     if (prefix || words.length) menu.backspace = prefix ? `delete the typed letter "${prefix.at(-1)}"` : `delete "${words.at(-1)}"`
-    if (words.length && !prefix) menu.SPEAK = 'finish and speak the text aloud'
+    if (words.filter((w) => /\w/.test(w)).length >= minWordsToSpeak && !prefix) menu.SPEAK = 'finish and speak the text aloud'
     for (const o of rejected.get(key()) ?? []) delete menu[o]
 
     const recent = steps.slice(-HISTORY).map((s) => s.pick)
-    const state = { instructions, ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recent.length ? recent : '(none)', text_so_far: text() || '(nothing yet)', letters_typed: prefix || '(none)' }
+    const state = { instructions: extraInstructions ? `${instructions}\n${extraInstructions}` : instructions, ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recent.length ? recent : '(none)', text_so_far: text() || '(nothing yet)', letters_typed: prefix || '(none)' }
     const questions = { next: choice('Which menu option do you pick next?', menu) }
     if (dryRun) {
       console.log(JSON.stringify({ state, questions }, null, 2))
