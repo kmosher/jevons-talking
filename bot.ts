@@ -34,7 +34,7 @@ const PER_USER_DAILY = 20
 // For anyone who follows an owner or whom an owner follows.
 const FRIEND_DAILY = 100
 const GLOBAL_DAILY = 500
-const POLL_MS = 30_000
+const POLL_MS = 5_000
 const POST_LIMIT = 300
 const DM_LIMIT = 1000
 const STATE_FILE = 'bot-state.json'
@@ -275,10 +275,10 @@ async function threadContext(uri: string): Promise<Post[]> {
   return [...(rootPost ? [rootPost] : []), ...(gap ? [{ author: '…', text: '(earlier posts omitted)' }] : []), ...kept]
 }
 
-// Bluesky occasionally creates no notification for a reply, so every SWEEP_EVERY polls the bot
+// Bluesky occasionally creates no notification for a reply, so every SWEEP_EVERY polls (~2.5 min) the bot
 // also reads the replies under its own posts from the last day, and treats any it hasn't handled
 // like a notification.
-const SWEEP_EVERY = 5
+const SWEEP_EVERY = 30
 let polls = 0
 type Incoming = { uri: string; cid: string; author: { did: string; handle: string }; record: unknown; indexedAt: string }
 async function missedReplies(): Promise<Incoming[]> {
@@ -301,7 +301,44 @@ async function missedReplies(): Promise<Incoming[]> {
 }
 
 const failures = new Map<string, number>()
+const inFlight = new Set<string>()
 const MAX_TRIES = 3
+const ERROR_REPLY = 'Something broke while I was typing, sorry. Try me again later?'
+const CREDITS_REPLY = 'I’m out of Jev credits, so I can’t pick any words right now. Try again later.'
+// Jev refusing for want of credits (402, or a quota/credit message) won't fix itself on retry.
+const outOfCredits = (e: unknown) => {
+  const status = (e as { status?: number }).status
+  return status === 402 || ((status === 429 || status === 403) && /credit|quota|balance|billing|payment/i.test(String((e as Error).message)))
+}
+
+async function replyTo(n: Incoming, record: { reply?: { root: Ref; parent: Ref } }, question: string, linked: Post[], full: boolean, root: Ref, parent: Ref) {
+  try {
+    const thread = record.reply ? await threadContext(n.uri) : []
+    // The question itself goes last, labelled with who asked it and with its images described.
+    const [view] = (await agent.getPosts({ uris: [n.uri] })).data.posts
+    const asker = view ? await asContext(view) : { author: `@${n.author.handle}`, text: question }
+    const t = await answer(question, [...thread, ...linked, asker])
+    const image = containsBlocked(t.answer) ? undefined : await traceImage(t, full)
+    const last = await post(headline(t), root, parent, image)
+    if (!image) {
+      let prev = last
+      for (const chunk of traceChunks(t, POST_LIMIT)) prev = await post(chunk, root, prev)
+    }
+    failures.delete(n.uri)
+  } catch (e) {
+    const tries = (failures.get(n.uri) ?? 0) + 1
+    failures.set(n.uri, tries)
+    const credits = outOfCredits(e)
+    log(`reply failed (try ${tries} of ${MAX_TRIES}${credits ? ', out of credits' : ''}) for @${n.author.handle}:`, e instanceof Error ? e.message : e)
+    // A failed reply (a Jev 503, a Bluesky hiccup) is retried on later polls; after the last
+    // try, or when Jev is out of credits, JT says so instead of going quiet.
+    if (tries < MAX_TRIES && !credits) {
+      handled.delete(n.uri)
+      saveState()
+    } else await post(credits ? CREDITS_REPLY : ERROR_REPLY, root, parent).catch(() => {})
+  }
+}
+
 async function pollMentions() {
   const { data } = await agent.listNotifications({ reasons: ['mention', 'reply'], limit: 50 })
   const seen = new Set(data.notifications.map((n) => n.uri))
@@ -309,7 +346,7 @@ async function pollMentions() {
     x.indexedAt.localeCompare(y.indexedAt),
   )
   for (const n of incoming) {
-    if (handled.has(n.uri)) continue
+    if (handled.has(n.uri) || inFlight.has(n.uri)) continue
     if (firstRun || !isAllowed(n.author.did)) {
       markHandled(n.uri)
       continue
@@ -331,34 +368,21 @@ async function pollMentions() {
     if (!question) continue
     const parent = { uri: n.uri, cid: n.cid }
     const root = record.reply?.root ?? parent
-    const admitted = await admit(n.author.did)
-    if (admitted !== 'ok') {
-      log(`over limit: @${n.author.handle} (${admitted})`)
-      if (admitted === 'warn') await post(LIMIT_REPLY, root, parent)
-      continue
-    }
-    try {
-      const thread = record.reply ? await threadContext(n.uri) : []
-      // The question itself goes last, labelled with who asked it and with its images described.
-      const [view] = (await agent.getPosts({ uris: [n.uri] })).data.posts
-      const asker = view ? await asContext(view) : { author: `@${n.author.handle}`, text: question }
-      const t = await answer(question, [...thread, ...linked, asker])
-      const image = containsBlocked(t.answer) ? undefined : await traceImage(t, full)
-      const last = await post(headline(t), root, parent, image)
-      if (!image) {
-        let prev = last
-        for (const chunk of traceChunks(t, POST_LIMIT)) prev = await post(chunk, root, prev)
+    // A retry was already admitted and liked; only a first attempt counts against the limits.
+    if (!failures.has(n.uri)) {
+      const admitted = await admit(n.author.did)
+      if (admitted !== 'ok') {
+        log(`over limit: @${n.author.handle} (${admitted})`)
+        if (admitted === 'warn') await post(LIMIT_REPLY, root, parent)
+        continue
       }
-    } catch (e) {
-      // A failed reply (a Jev 503, a Bluesky hiccup) is retried on the next polls, a few times.
-      const tries = (failures.get(n.uri) ?? 0) + 1
-      failures.set(n.uri, tries)
-      log(`reply failed (try ${tries} of ${MAX_TRIES}) for @${n.author.handle}:`, e instanceof Error ? e.message : e)
-      if (tries < MAX_TRIES) {
-        handled.delete(n.uri)
-        saveState()
-      }
+      // A like on the question says JT has seen it and is typing.
+      await agent.like(n.uri, n.cid).catch((e) => log('like failed:', e instanceof Error ? e.message : e))
     }
+    // Replies run concurrently: each is almost all waiting on Jev, so there's nothing to gain
+    // by queueing one behind another's beam search.
+    inFlight.add(n.uri)
+    void replyTo(n, record, question, linked, full, root, parent).finally(() => inFlight.delete(n.uri))
   }
   await agent.updateSeenNotifications()
 }
