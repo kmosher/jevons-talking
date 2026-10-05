@@ -5,7 +5,7 @@
 //
 // Usage: npm run -s talk:hybrid -- [--q="..."] [--good=0.35]
 import { type BeamTalk, beam, rateDrafts } from './beam.ts'
-import { isBare, type Post, save, talk } from './talk.ts'
+import { classify, isBare, type Mode, type Post, save, talk } from './talk.ts'
 
 const SINGLE_STEPS = 40
 // The single path's answer is kept if it rates at least this; otherwise the beam runs.
@@ -13,16 +13,20 @@ const HAND_OFF = 0.35
 // A bare yes or no must rate at least this as a good answer to be kept, at either stage.
 const BARE_BAR = 0.6
 
-export type HybridOptions = { conversation?: Post[]; good?: number; log?: (line: string) => void }
-export type HybridTalk = BeamTalk & { path: 'single' | 'beam' }
+export type HybridOptions = { mode?: Mode; conversation?: Post[]; good?: number; log?: (line: string) => void }
+export type HybridTalk = BeamTalk & { path: 'single' | 'beam'; mode: Mode }
 
 export async function hybrid(question: string, opts: HybridOptions = {}): Promise<HybridTalk> {
   const { conversation, good = HAND_OFF, log = () => {} } = opts
+  // First, what kind of reply the message calls for: an answer, a comeback, a reaction or thanks.
+  const classified = opts.mode ? null : await classify(question, conversation)
+  const mode = opts.mode ?? classified!.mode
+  log(`mode: ${mode}${classified ? ` (${(classified.confidence * 100).toFixed(0)}%)` : ''}`)
   // The single path gets fewer steps: if it hasn't finished by then, the beam is the better bet.
-  const single = await talk(question, { conversation, maxSteps: SINGLE_STEPS, phrases: Number(process.env.JEV_PHRASES ?? 0), log })
-  // One call per pick, plus one per final-answer check, plus the rating below.
-  const singleCalls = single.steps.length + single.steps.filter((s) => s.final !== undefined).length + 1
-  const rating = single.answer ? (await rateDrafts(question, [single.answer], conversation))[0] : 0
+  const single = await talk(question, { mode, conversation, maxSteps: SINGLE_STEPS, phrases: Number(process.env.JEV_PHRASES ?? 0), log })
+  // One call per pick, plus one per final-answer check, plus the rating below and the classification.
+  const singleCalls = single.steps.length + single.steps.filter((s) => s.final !== undefined).length + 1 + (classified ? 1 : 0)
+  const rating = single.answer ? (await rateDrafts(question, [single.answer], conversation, mode))[0] : 0
   log(`single path: "${single.answer}" rated ${(rating * 100).toFixed(0)}% in ${singleCalls} calls`)
   const asSingle: HybridTalk = {
     ...single,
@@ -30,10 +34,11 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
     judged: { [single.answer]: rating },
     calls: singleCalls,
     path: 'single',
+    mode,
   }
   if (rating >= (isBare(single.answer) ? BARE_BAR : good)) return asSingle
 
-  const b = await beam(question, { conversation, seed: [single.answer], log })
+  const b = await beam(question, { mode, conversation, seed: [single.answer], log })
   // The final pick is a fresh rating of the single answer and the beam's best drafts.
   const beamBest = Object.entries(b.judged ?? {})
     .filter(([d]) => d !== single.answer && b.draftSteps?.[d])
@@ -41,7 +46,7 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
     .slice(0, 3)
     .map(([d]) => d)
   const finalists = [...new Set([single.answer, ...beamBest])].filter(Boolean)
-  const fresh = await rateDrafts(question, finalists, conversation)
+  const fresh = await rateDrafts(question, finalists, conversation, mode)
   const judged = Object.fromEntries(finalists.map((d, i) => [d, fresh[i]]))
   // Bare yes/no candidates under BARE_BAR are out, unless nothing else is left.
   const eligible = fresh.map((r, i) => (isBare(finalists[i]) && r < BARE_BAR ? -1 : r))
@@ -52,7 +57,7 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
   if (best === single.answer) return { ...asSingle, judged, calls }
   // The beam's answer may be a draft other than its own pick; use that draft's path for the trace.
   const steps = b.answer === best ? b.steps : (b.draftSteps?.[best] ?? b.steps)
-  return { ...b, answer: best, steps, judged, calls, path: 'beam' }
+  return { ...b, answer: best, steps, judged, calls, path: 'beam', mode }
 }
 
 if (import.meta.main) {

@@ -16,8 +16,10 @@ import {
   branchKey,
   branchText,
   cloneBranch,
-  instructions,
+  instructionsFor,
   jev,
+  type Mode,
+  MODES,
   menuFor,
   newBranch,
   isBare,
@@ -29,6 +31,7 @@ import {
 } from './talk.ts'
 
 export type BeamOptions = {
+  mode?: Mode
   // Drafts written elsewhere (the single path's answer) to rate alongside the beam's own.
   seed?: string[]
   conversation?: Post[]
@@ -46,7 +49,7 @@ export type BeamOptions = {
 export type Draft = { answer: string; score: number; picks: number }
 export type BeamTalk = Talk & { drafts: Draft[]; draftSteps?: Record<string, Step[]>; judged: Record<string, number> | null; calls: number }
 
-const beamInstructions = `${instructions}
+const beamInstructions = (mode: Mode) => `${instructionsFor(mode)}
 Several drafts of your answer are being written in parallel; each is a branch under branches_so_far
 with its own text and recent actions. Choose each branch's next option independently, as if that
 draft were the only one.`
@@ -63,7 +66,7 @@ const adjust = (draft: string, question: string, rating: number) => (echoes(draf
 // Rates candidate answers in a fresh call that sees only the question, the conversation and
 // the candidates: no keyboard instructions, branches or history, which swung ratings of the
 // same answer by tens of points.
-export async function rateDrafts(question: string, drafts: string[], conversation?: Post[]): Promise<number[]> {
+export async function rateDrafts(question: string, drafts: string[], conversation?: Post[], mode: Mode = 'answer'): Promise<number[]> {
   const ids = drafts.map((_, i) => `a${i}`)
   const r = await jev().systemOne({
     state: {
@@ -71,7 +74,7 @@ export async function rateDrafts(question: string, drafts: string[], conversatio
       question,
       candidate_answers: Object.fromEntries(drafts.map((d, i) => [ids[i], forRating(d)])),
     },
-    questions: Object.fromEntries(ids.map((id) => [id, noul(`Is candidate answer \`${id}\` a good answer to the question?`)])),
+    questions: Object.fromEntries(ids.map((id) => [id, noul(`Is candidate \`${id}\` ${MODES[mode].judge}?`)])),
   })
   return drafts.map((d, i) => adjust(d, question, (r.answers[ids[i]] as { noul: number }).noul))
 }
@@ -91,7 +94,7 @@ function distinctBy<T>(items: T[], key: (t: T) => string): T[] {
 }
 
 export async function beam(question: string, opts: BeamOptions = {}): Promise<BeamTalk> {
-  const { conversation, seed = [], width = 3, split = 0.05, maxSplit = 3, maxSteps = 40, scoring = 'mean', good = GOOD_ENOUGH, dryRun = false, log = () => {} } = opts
+  const { mode = 'answer', conversation, seed = [], width = 3, split = 0.05, maxSplit = 3, maxSteps = 40, scoring = 'mean', good = GOOD_ENOUGH, dryRun = false, log = () => {} } = opts
   // A product of probabilities shrinks with every pick, so it favours short drafts; the
   // geometric mean ranks drafts by how confident each pick was, whatever their length.
   const rank = (b: Branch) =>
@@ -111,7 +114,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
   const ask = async (branchQuestions: Record<string, ReturnType<typeof choice>>, branchState: Record<string, { text_so_far: string; letters_typed: string; recent_actions: string | string[] }> | null, drafts: string[]) => {
     const draftIds = drafts.map((_, i) => `d${i}`)
     const state = {
-      instructions: beamInstructions,
+      instructions: beamInstructions(mode),
       ...(conversation?.length ? { conversation_so_far: conversation } : {}),
       question,
       ...(branchState ? { branches_so_far: branchState } : {}),
@@ -119,7 +122,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
     }
     const questions = {
       ...branchQuestions,
-      ...Object.fromEntries(draftIds.map((id) => [id, noul(`Is finished draft \`${id}\` a good final answer to the question?`)])),
+      ...Object.fromEntries(draftIds.map((id) => [id, noul(`Is finished draft \`${id}\` ${MODES[mode].judge}?`)])),
     }
     if (dryRun) {
       console.log(JSON.stringify({ state, questions: Object.fromEntries(Object.entries(questions).slice(0, 1)) }, null, 2))

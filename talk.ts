@@ -22,7 +22,7 @@ import { choice, noul, TypeSafeClient } from '@typesafe-ai/sdk'
 export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number }
 export type Talk = { question: string; answer: string; finished: boolean; steps: Step[] }
 export type Post = { author: string; text: string }
-type Options = { phrases?: number; conversation?: Post[]; extraInstructions?: string; minWordsToSpeak?: number; confirmSpeak?: boolean; maxRejections?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
+type Options = { mode?: Mode; phrases?: number; conversation?: Post[]; extraInstructions?: string; minWordsToSpeak?: number; confirmSpeak?: boolean; maxRejections?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
 
 // --- Blocklist ---------------------------------------------------------------
 const blocked = new Set(
@@ -89,8 +89,49 @@ menu option. Options are:
 recent_actions lists your last few picks. Options you already backspaced over from the current text
 are not offered again: if you're stuck, backspace further and rephrase.
 If conversation_so_far is present, the question is the latest message in that conversation; posts
-by "you" are your own earlier replies, and "@you" in a message means it is addressed to you.
-Aim for a short, correct answer of one or two sentences, then pick SPEAK.`
+by "you" are your own earlier replies, and "@you" in a message means it is addressed to you.`
+
+// What kind of reply a message calls for, chosen by Jev before it writes anything. Each mode
+// sets the last line of the instructions and the wording the judges rate drafts against.
+export const MODES = {
+  answer: {
+    when: 'it asks a question that can be answered',
+    instruction: 'Aim for a short, correct answer of one or two sentences, then pick SPEAK.',
+    judge: 'a good answer to the question',
+  },
+  comeback: {
+    when: 'it is a remark, claim, joke, challenge or provocation rather than a real question',
+    instruction: 'The message is not really a question: reply with a short, witty comeback, then pick SPEAK.',
+    judge: 'a good, witty reply to the message',
+  },
+  react: {
+    when: 'it shares a link, image or post and wants your reaction',
+    instruction: 'React to what was shared with a short, opinionated sentence, then pick SPEAK.',
+    judge: 'a good reaction to what was shared',
+  },
+  acknowledge: {
+    when: 'it is thanks, praise, a greeting or a goodbye',
+    instruction: 'Reply graciously in a few words, then pick SPEAK.',
+    judge: 'a fitting reply to the message',
+  },
+} as const
+export type Mode = keyof typeof MODES
+export const instructionsFor = (mode: Mode = 'answer') => `${instructions}\n${MODES[mode].instruction}`
+
+// One choice call: which kind of reply the message calls for.
+export async function classify(question: string, conversation?: Post[]): Promise<{ mode: Mode; confidence: number }> {
+  const r = await jev().systemOne({
+    state: { ...(conversation?.length ? { conversation_so_far: conversation } : {}), message: question },
+    questions: {
+      mode: choice(
+        'What kind of reply does the message call for?',
+        Object.fromEntries(Object.entries(MODES).map(([k, m]) => [k, `reply this way when ${m.when}`])),
+      ),
+    },
+  })
+  const a = r.answers.mode as { choice: Mode; confidence: number }
+  return { mode: a.choice, confidence: a.confidence }
+}
 const HISTORY = 10
 let client: TypeSafeClient | undefined
 export const jev = () => (client ??= new TypeSafeClient())
@@ -192,13 +233,13 @@ export const recentActions = (b: Branch) => {
 }
 
 export async function talk(question: string, opts: Options = {}): Promise<Talk> {
-  const { phrases = 0, conversation, extraInstructions, minWordsToSpeak = 1, confirmSpeak = false, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
+  const { mode = 'answer', phrases = 0, conversation, extraInstructions, minWordsToSpeak = 1, confirmSpeak = false, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
   client ??= new TypeSafeClient()
   const b = newBranch()
 
   for (let step = 0; step < maxSteps; step++) {
     const menu = menuFor(b, { words: nWords, common, minWordsToSpeak, phrases })
-    const state = { instructions: extraInstructions ? `${instructions}\n${extraInstructions}` : instructions, ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recentActions(b), text_so_far: branchText(b) || '(nothing yet)', letters_typed: b.prefix || '(none)' }
+    const state = { instructions: extraInstructions ? `${instructionsFor(mode)}\n${extraInstructions}` : instructionsFor(mode), ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recentActions(b), text_so_far: branchText(b) || '(nothing yet)', letters_typed: b.prefix || '(none)' }
     const questions = { next: choice('Which menu option do you pick next?', menu) }
     if (dryRun) {
       console.log(JSON.stringify({ state, questions }, null, 2))

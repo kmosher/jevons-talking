@@ -173,6 +173,7 @@ async function describe(url: string): Promise<string | null> {
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+  if (caption) log(`image described: ${caption}`)
   captions.set(url, caption)
   return caption
 }
