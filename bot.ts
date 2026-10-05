@@ -30,10 +30,10 @@ const ALLOWED = (process.env.ALLOWED_HANDLES ?? '*').split(',').map((h) => h.tri
 const OPEN = ALLOWED.includes('*')
 // Owners are exempt from the daily limits.
 const OWNERS = (process.env.OWNER_HANDLES ?? 'mosheroperandi.bsky.social').split(',').map((h) => h.trim())
-const PER_USER_DAILY = 5
+const PER_USER_DAILY = 20
 // For anyone who follows an owner or whom an owner follows.
-const FRIEND_DAILY = 24
-const GLOBAL_DAILY = 100
+const FRIEND_DAILY = 100
+const GLOBAL_DAILY = 500
 const POLL_MS = 30_000
 const POST_LIMIT = 300
 const DM_LIMIT = 1000
