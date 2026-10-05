@@ -86,14 +86,23 @@ export async function rateDrafts(question: string, drafts: string[], conversatio
       ids.flatMap((id) => [
         [id, noul(`Is candidate \`${id}\` ${MODES[mode].judge}?`)],
         [`${id}_generic`, noul(`Is candidate \`${id}\` generic: a reply that could answer almost any message?`)],
+        ...(BROKEN ? wordsOfDraft(drafts[ids.indexOf(id)]).map((w, j) => [`${id}_w${j}`, noul(`Would you replace word ${j + 1} of candidate \`${id}\` ("${w}") with a better word, if you could?`)] as const) : []),
       ]),
     ),
   })
   const v = (k: string) => (r.answers[k] as { noul: number }).noul
   // Generic replies ("lol", "thanks", "so funny") are marked down: Jev's "good" rating alone
   // doesn't penalise blandness, and asking it for "surprising" rewarded word salad instead.
-  return drafts.map((d, i) => adjust(d, question, v(ids[i]) * (1 - GENERIC_WEIGHT * v(`${ids[i]}_generic`))))
+  // With JEV_BROKEN=on, a draft with a word Jev badly wants to replace ("can not be out") is
+  // marked down by how far its worst word's rating rises above a fine word's typical ~35%.
+  const broken = (i: number) =>
+    BROKEN ? Math.max(0, ...wordsOfDraft(drafts[i]).map((_, j) => (v(`${ids[i]}_w${j}`) - BROKEN_FLOOR) / (1 - BROKEN_FLOOR))) : 0
+  return drafts.map((d, i) => adjust(d, question, v(ids[i]) * (1 - GENERIC_WEIGHT * v(`${ids[i]}_generic`)) * (1 - BROKEN_WEIGHT * broken(i))))
 }
+const BROKEN = process.env.JEV_BROKEN === 'on'
+const BROKEN_FLOOR = 0.35
+const BROKEN_WEIGHT = 0.6
+const wordsOfDraft = (d: string) => forRating(d).split(/\s+/).filter((w) => /[a-z0-9]/i.test(w))
 
 export const echoes = (draft: string, question: string) => {
   const asked = new Set(wordsOf(question))
