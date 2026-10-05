@@ -62,7 +62,11 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
     mode,
     keyboard: chosenKeyboard,
   }
-  if (rating >= (isBare(single.answer) ? BARE_BAR : good)) return asSingle
+  // With JEV_EXPLORE=1, a reply of two words or fewer goes to the beam even when it rated well,
+  // so the search can get past a first word that SPEAK made too easy to stop at.
+  const explore = process.env.JEV_EXPLORE === '1' && single.answer.split(/\s+/).filter((w) => /\w/.test(w)).length <= 2
+  if (!explore && rating >= (isBare(single.answer) ? BARE_BAR : good)) return asSingle
+  if (explore) log(`exploring past "${single.answer}"`)
 
   const b = await beam(question, { keyboard: chosenKeyboard, mode, conversation, seed: drafts.map((d) => d.t.answer).filter(Boolean), log })
   // The final pick is a fresh rating of the single answer and the beam's best drafts.

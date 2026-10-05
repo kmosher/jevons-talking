@@ -70,6 +70,26 @@ if (process.env.JEV_CHAT_WORDS === '1')
   for (const line of readFileSync(new URL('conversation.txt', import.meta.url), 'utf8').split('\n')) {
     if (line.trim() && !line.startsWith('#')) count(line.toLowerCase(), CONVERSATION_WEIGHT)
   }
+// JEV_NORVIG_PAIRS=<path to Peter Norvig's count_2w.txt> blends web-scale word-pair counts into
+// the bigram model, scaled so its biggest pair matches WordNet's biggest.
+if (process.env.JEV_NORVIG_PAIRS) {
+  let maxWordNet = 0
+  for (const m of bigram.values()) for (const n of m.values()) if (n > maxWordNet) maxWordNet = n
+  const pairs: [string, string, number][] = []
+  for (const line of readFileSync(process.env.JEV_NORVIG_PAIRS, 'utf8').split('\n')) {
+    const [both, n] = line.split('\t')
+    const [a, b] = (both ?? '').toLowerCase().split(' ')
+    if (!b || !/^[a-z]+(?:'[a-z]+)?$/.test(a) || !/^[a-z]+(?:'[a-z]+)?$/.test(b) || isBlocked(a) || isBlocked(b)) continue
+    pairs.push([a, b, Number(n)])
+  }
+  const scale = maxWordNet / pairs.reduce((max, p) => Math.max(max, p[2]), 0)
+  for (const [a, b, n] of pairs) {
+    const m = bigram.get(a) ?? new Map<string, number>()
+    m.set(b, (m.get(b) ?? 0) + n * scale)
+    bigram.set(a, m)
+  }
+}
+
 // Words are ranked (for the common slots, backoff and completions) by Android's keyboard
 // frequencies from AOSP LatinIME, in data/; JEV_RANKING=wordnet ranks by WordNet counts instead.
 const AOSP = process.env.JEV_AOSP_WORDLIST ?? fileURLToPath(new URL('data/aosp_en_US_wordlist.combined.gz', import.meta.url))
