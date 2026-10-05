@@ -151,8 +151,8 @@ export function renderSvg(t: Talk): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><rect width="${W}" height="${H}" fill="${C.bg}"/>${parts.join('')}</svg>`
 }
 
-export function renderPng(t: Talk): { png: Buffer; width: number; height: number } {
-  const r = new Resvg(renderSvg(t), { fitTo: { mode: 'zoom', value: 2 }, font: { loadSystemFonts: true, defaultFontFamily: 'Helvetica Neue' } }).render()
+export function renderPng(t: Talk, zoom = 2): { png: Buffer; width: number; height: number } {
+  const r = new Resvg(renderSvg(t), { fitTo: { mode: 'zoom', value: zoom }, font: { loadSystemFonts: true, defaultFontFamily: 'Helvetica Neue' } }).render()
   return { png: r.asPng(), width: r.width, height: r.height }
 }
 

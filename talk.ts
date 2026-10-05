@@ -18,7 +18,8 @@ import { choice, TypeSafeClient } from '@typesafe-ai/sdk'
 
 export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number> }
 export type Talk = { question: string; answer: string; finished: boolean; steps: Step[] }
-type Options = { maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
+export type Post = { author: string; text: string }
+type Options = { conversation?: Post[]; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
 
 // --- Blocklist ---------------------------------------------------------------
 const blocked = new Set(
@@ -83,12 +84,14 @@ menu option. Options are:
   your text is spoken aloud as your final answer).
 recent_actions lists your last few picks. Options you already backspaced over from the current text
 are not offered again: if you're stuck, backspace further and rephrase.
+If conversation_so_far is present, the question is the latest message in that conversation; posts
+by "you" are your own earlier replies.
 Aim for a short, correct answer of one or two sentences, then pick SPEAK.`
 const HISTORY = 10
 let client: TypeSafeClient | undefined
 
 export async function talk(question: string, opts: Options = {}): Promise<Talk> {
-  const { maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
+  const { conversation, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
   client ??= new TypeSafeClient()
   const words: string[] = []
   let prefix = ''
@@ -113,7 +116,7 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
     for (const o of rejected.get(key()) ?? []) delete menu[o]
 
     const recent = steps.slice(-HISTORY).map((s) => s.pick)
-    const state = { instructions, question, recent_actions: recent.length ? recent : '(none)', text_so_far: text() || '(nothing yet)', letters_typed: prefix || '(none)' }
+    const state = { instructions, ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recent.length ? recent : '(none)', text_so_far: text() || '(nothing yet)', letters_typed: prefix || '(none)' }
     const questions = { next: choice('Which menu option do you pick next?', menu) }
     if (dryRun) {
       console.log(JSON.stringify({ state, questions }, null, 2))
