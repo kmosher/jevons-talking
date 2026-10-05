@@ -131,7 +131,9 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   for (const l of letters) menu[`letter: ${l}`] = `narrow predictions to words starting "${prefix + l}"`
   if (!prefix) for (const p of ['.', ',', '?']) menu[p] = `append "${p}"`
   if (prefix || words.length) menu.backspace = prefix ? `delete the typed letter "${prefix.at(-1)}"` : `delete "${words.at(-1)}"`
-  if (words.filter((w) => /\w/.test(w)).length >= o.minWordsToSpeak && !prefix) menu.SPEAK = 'finish and speak the text aloud'
+  // A bare yes or no ("no", "no.", "no. no") can't be spoken: Jev has to say something more.
+  const bare = words.length > 0 && words.every((w) => /^(yes|no|[.,?])$/.test(w))
+  if (words.filter((w) => /\w/.test(w)).length >= o.minWordsToSpeak && !prefix && !bare) menu.SPEAK = 'finish and speak the text aloud'
   for (const opt of b.rejected.get(branchKey(b)) ?? []) delete menu[opt]
   return menu
 }
