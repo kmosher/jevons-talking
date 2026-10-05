@@ -14,7 +14,7 @@
 // Env: BLUESKY_HANDLE, BLUESKY_APP_PASSWORD, ALLOWED_HANDLES (comma-separated, or * for anyone), OWNER_HANDLES, TYPESAFE_API_KEY
 // Usage: npm run bot
 import { execFile } from 'node:child_process'
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -141,29 +141,37 @@ const addressed = (text: string) => text.replace(new RegExp(`@${HANDLE.replace(/
 const ownText = (text: string) => text.split('\n\n')[0].trim()
 
 // --- Images --------------------------------------------------------------------
-// Images become text: the poster's alt text, or else a one-sentence description from Claude
-// Haiku via `claude -p`. The LLM only ever describes images; it never writes Jev's words.
+// Every image gets a one-sentence description from gpt-6-luna via a stripped-down `codex exec`
+// (no user config, rules, plugins, skills, apps, hooks or shell, run from an empty folder), plus
+// the poster's alt text when there is some. The model only ever describes images; it never
+// writes Jev's words.
 const run = promisify(execFile)
+const CODEX_ARGS = [
+  'exec', '--ignore-user-config', '--ignore-rules', '--ephemeral', '--skip-git-repo-check', '-s', 'read-only',
+  '-m', 'gpt-6-luna', '-c', 'model_reasoning_effort=low',
+  ...['apps', 'hooks', 'multi_agent', 'image_generation', 'plugins', 'skill_search', 'skill_mcp_dependency_install', 'shell_tool'].flatMap((f) => ['--disable', f]),
+]
 const captions = new Map<string, string | null>()
 async function describe(url: string): Promise<string | null> {
   if (captions.has(url)) return captions.get(url)!
-  const file = join(tmpdir(), `jevons-${captions.size}-${Date.now()}.jpg`)
+  const dir = mkdtempSync(join(tmpdir(), 'jevons-image-'))
+  const image = join(dir, 'image.jpg')
+  const out = join(dir, 'caption.txt')
   let caption: string | null = null
   try {
-    writeFileSync(file, Buffer.from(await (await fetch(url)).arrayBuffer()))
-    const { stdout } = await run(
-      'claude',
-      ['-p', '--model', 'claude-haiku-4-5', '--tools', 'Read', '--allowedTools', 'Read',
-        '--system-prompt', "You describe images for someone who can't see them. Reply with one plain sentence, no preamble.",
-        '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '', '--disable-slash-commands',
-        '--output-format', 'json', `Describe the image at ${file}`],
-      { timeout: 90_000 },
-    )
-    caption = (JSON.parse(stdout) as { result?: string }).result?.trim() || null
+    writeFileSync(image, Buffer.from(await (await fetch(url)).arrayBuffer()))
+    const job = run('codex', [...CODEX_ARGS, '-i', image, '-o', out, "Describe the attached image in one plain sentence for someone who can't see it. No preamble."], {
+      cwd: dir,
+      timeout: 90_000,
+    })
+    // codex exec reads extra prompt from stdin when it's a pipe; close it so it doesn't wait.
+    job.child.stdin?.end()
+    await job
+    caption = readFileSync(out, 'utf8').trim() || null
   } catch (e) {
     log('image description failed:', e instanceof Error ? e.message : e)
   } finally {
-    rmSync(file, { force: true })
+    rmSync(dir, { recursive: true, force: true })
   }
   captions.set(url, caption)
   return caption
@@ -173,7 +181,13 @@ async function imageNotes(p: AppBskyFeedDefs.PostView): Promise<string> {
   if (p.author.did === agent.session?.did) return ''
   const embed = p.embed as { images?: ImageView[]; media?: { images?: ImageView[] } } | undefined
   const images = [...(embed?.images ?? []), ...(embed?.media?.images ?? [])].slice(0, 4)
-  const notes = await Promise.all(images.map(async (i) => i.alt?.trim() || (i.fullsize ? await describe(i.fullsize) : null)))
+  const notes = await Promise.all(
+    images.map(async (i) => {
+      const caption = i.fullsize ? await describe(i.fullsize) : null
+      const alt = i.alt?.trim()
+      return [caption, alt && `alt text: ${alt}`].filter(Boolean).join(' / ') || null
+    }),
+  )
   return notes.filter(Boolean).map((n) => `\n[image: ${n}]`).join('')
 }
 // A post as a context entry: the bot's own posts as "you", without stats or trace images.
