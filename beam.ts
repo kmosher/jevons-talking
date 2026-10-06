@@ -43,6 +43,10 @@ import {
   recentActions,
   save,
   type Talk,
+  MODERATION_NOTE,
+  readScores,
+  rubricQuestions,
+  type Scores,
 } from './talk.ts'
 
 export type BeamOptions = {
@@ -88,6 +92,11 @@ const adjust = (draft: string, question: string, rating: number) => (echoes(draf
 // Rates candidate answers in a fresh call that sees only the question, the conversation and
 // the candidates: no keyboard instructions, branches or history, which swung ratings of the
 // same answer by tens of points.
+// The self-moderation scores ride along in the same call (JEV_MODERATE=off skips them); the
+// finished reply's scores are looked up here rather than asked for again.
+const MODERATE = process.env.JEV_MODERATE !== 'off'
+const draftScores = new Map<string, Scores>()
+export const scoresFor = (question: string, draft: string) => draftScores.get(`${question}\0${forRating(draft)}`)
 export async function rateDrafts(question: string, drafts: string[], conversation?: Post[], mode: Mode = 'answer'): Promise<number[]> {
   const ids = drafts.map((_, i) => `a${i}`)
   const r = await jev().systemOne({
@@ -95,11 +104,13 @@ export async function rateDrafts(question: string, drafts: string[], conversatio
       ...(conversation?.length ? { conversation_so_far: conversation } : {}),
       question,
       candidate_answers: Object.fromEntries(drafts.map((d, i) => [ids[i], forRating(d)])),
+      ...(MODERATE ? { note_for_score_questions: MODERATION_NOTE } : {}),
     },
     questions: Object.fromEntries(
       ids.flatMap((id) => [
         [id, noul(`Is candidate \`${id}\` ${MODES[mode].judge}?`)],
         [`${id}_generic`, noul(`Is candidate \`${id}\` generic: a reply that could answer almost any message?`)],
+        ...(MODERATE ? Object.entries(rubricQuestions(`candidate \`${id}\`, as your reply`, `${id}_score`)) : []),
         ...(COMPLETE ? [[`${id}_complete`, noul(`Is candidate \`${id}\` a complete thought, rather than cut off mid-sentence?`)] as const] : []),
         ...(BROKEN ? wordsOfDraft(drafts[ids.indexOf(id)]).map((w, j) => [`${id}_w${j}`, noul(`Would you replace word ${j + 1} of candidate \`${id}\` ("${w}") with a better word, if you could?`)] as const) : []),
       ]),
@@ -112,6 +123,11 @@ export async function rateDrafts(question: string, drafts: string[], conversatio
   // marked down by how far its worst word's rating rises above a fine word's typical ~35%.
   const broken = (i: number) =>
     BROKEN ? Math.max(0, ...wordsOfDraft(drafts[i]).map((_, j) => (v(`${ids[i]}_w${j}`) - BROKEN_FLOOR) / (1 - BROKEN_FLOOR))) : 0
+  if (MODERATE)
+    drafts.forEach((d, i) => {
+      const sc = readScores(r.answers as Record<string, unknown>, `${ids[i]}_score`)
+      if (sc) draftScores.set(`${question}\0${forRating(d)}`, sc)
+    })
   const said = (conversation ?? []).filter((p) => p.author.startsWith('you')).map((p) => p.text)
   return drafts.map((d, i) => {
     const complete = COMPLETE ? v(`${ids[i]}_complete`) : 1

@@ -282,7 +282,7 @@ async function missedReplies(): Promise<Incoming[]> {
 }
 
 // A message JT couldn't answer for want of Jev credits is tried again once the notice is
-// CREDITS_RETRY_AFTER old: the notice is deleted and the message answered as if new (if credits
+// CREDITS_RETRY_AFTER old: the notice is deleted and, unless JT has replied since, the message answered as if new (if credits
 // are still out, a fresh notice replaces the old one).
 const CREDITS_RETRY_AFTER = 30 * 60_000
 async function creditsRetries(): Promise<Incoming[]> {
@@ -293,9 +293,15 @@ async function creditsRetries(): Promise<Incoming[]> {
     const record = item.post.record as { text?: string; reply?: { parent: Ref } }
     const age = Date.now() - Date.parse(item.post.indexedAt)
     if (item.post.author.did !== me || record.text !== CREDITS_REPLY || !record.reply || age < CREDITS_RETRY_AFTER || age > 7 * 86_400_000) continue
-    const [p] = (await agent.getPosts({ uris: [record.reply.parent.uri] })).data.posts
+    const t: unknown = (await agent.getPostThread({ uri: record.reply.parent.uri, depth: 1, parentHeight: 0 }).catch(() => undefined))?.data.thread
     await agent.deletePost(item.post.uri)
-    if (!p) continue
+    if (!AppBskyFeedDefs.isThreadViewPost(t)) continue
+    const p = (t as AppBskyFeedDefs.ThreadViewPost).post
+    // Already answered since (a later retry got through): just the notice goes.
+    const answered = ((t as AppBskyFeedDefs.ThreadViewPost).replies ?? []).some(
+      (r) => AppBskyFeedDefs.isThreadViewPost(r) && r.post.author.did === me && (r.post.record as { text?: string }).text !== CREDITS_REPLY,
+    )
+    if (answered) continue
     handled.delete(p.uri)
     failures.delete(p.uri)
     out.push({ uri: p.uri, cid: p.cid, author: p.author, record: p.record, indexedAt: p.indexedAt })

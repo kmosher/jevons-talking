@@ -4,7 +4,7 @@
 // question and the candidates, rates the single answer against the beam's best drafts.
 //
 // Usage: npm run -s talk:hybrid -- [--q="..."] [--good=0.35]
-import { type BeamTalk, beam, rateDrafts } from './beam.ts'
+import { type BeamTalk, beam, rateDrafts, scoresFor } from './beam.ts'
 import { type Rewrite, rewrite } from './rewrite.ts'
 import { SPEAK_GATE, classify, moderate, type Scores, isBare, unfamiliarWords, usefulWords, verdict, relevantContext, type Keyboard, type Mode, type Post, save, talk } from './talk.ts'
 
@@ -35,9 +35,11 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
     if (rw) t = { ...t, rewrite: rw, answer: rw.kept === 'after' ? rw.after : t.answer, calls: t.calls + rw.calls }
   }
   if (process.env.JEV_MODERATE !== 'off' && t.answer) {
-    const scores = await moderate(question, t.answer, opts.conversation)
+    // Usually already scored alongside the draft's rating; a separate call only if not.
+    const rated = scoresFor(question, t.answer)
+    const scores = rated ?? (await moderate(question, t.answer, opts.conversation))
     opts.log?.(`moderation: ${Object.entries(scores).map(([k, v]) => `${k} ${v.toFixed(1)}`).join(', ')}`)
-    t = { ...t, scores, calls: t.calls + 1 }
+    t = { ...t, scores, calls: t.calls + (rated ? 0 : 1) }
   }
   return t
 }

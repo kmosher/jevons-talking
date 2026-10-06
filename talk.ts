@@ -833,14 +833,14 @@ export const RUBRICS = ['funny', 'insightful', 'informative', 'interesting'] as 
 export type Scores = Record<(typeof RUBRICS)[number], number>
 // Jev's score questions take a 0-5 rubric and return the expected score.
 const LEVELS = (r: string) => [`not ${r} at all`, `barely ${r}`, `a little ${r}`, `fairly ${r}`, `very ${r}`, `as ${r} as a reply gets`] as const
-export const rubricQuestions = (what: string) => Object.fromEntries(RUBRICS.map((r) => [`score_${r}`, score(`How ${r} is ${what}?`, LEVELS(r))]))
+export const rubricQuestions = (what: string, key = 'score') => Object.fromEntries(RUBRICS.map((r) => [`${key}_${r}`, score(`How ${r} is ${what}?`, LEVELS(r))]))
 // Asked plainly, Jev scored nearly everything under 1. Judging as the reply's proud author, by what
 // the keyboard allows, spreads the scores (best rubric averaged 1.0 -> 1.5 on 14 live replies).
 export const MODERATION_NOTE =
   'You wrote this reply yourself, picking one word at a time from a tiny predictive keyboard that cannot write freely. Judge it kindly, as its proud author, by what you managed with that keyboard.'
-export const readScores = (answers: Record<string, unknown>): Scores | undefined => {
-  if (!RUBRICS.every((r) => answers[`score_${r}`])) return undefined
-  return Object.fromEntries(RUBRICS.map((r) => [r, (answers[`score_${r}`] as { score: number }).score])) as Scores
+export const readScores = (answers: Record<string, unknown>, key = 'score'): Scores | undefined => {
+  if (!RUBRICS.every((r) => answers[`${key}_${r}`])) return undefined
+  return Object.fromEntries(RUBRICS.map((r) => [r, (answers[`${key}_${r}`] as { score: number }).score])) as Scores
 }
 export async function moderate(question: string, answer: string, conversation?: Post[]): Promise<Scores> {
   const r = await jev().systemOne({
