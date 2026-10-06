@@ -29,6 +29,7 @@ import {
   typingState,
   flagSwap,
   fixQuestions,
+  resolveSwaps,
   type Post,
   type Step,
   recentActions,
@@ -232,6 +233,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
     const byKey = new Map<string, Branch>()
     for (const c of children) if (rank(byKey.get(branchKey(c)) ?? c) <= rank(c)) byKey.set(branchKey(c), c)
     live = [...byKey.values()].sort(byRank).slice(0, width)
+    if (await resolveSwaps(live, { question, conversation })) calls++
     log(
       `${String(step + 1).padStart(2)} ` +
         live.map((b) => `[${rank(b).toFixed(3)}] ${branchText(b)}${b.prefix ? ` ${b.prefix}…` : ''}`).join('  |  ') +

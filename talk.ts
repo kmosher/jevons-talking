@@ -443,11 +443,7 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   // Any letter or digit, like a real keyboard, so Jev can spell words the predictor doesn't know.
   const letters = 'abcdefghijklmnopqrstuvwxyz0123456789'
   // Replacements for a word Jev just flagged, from the thesaurus (rewrite-as-you-type).
-  if (b.swap && !prefix) {
-    const fn = FUNCTION_WORDS.has(b.swap.word.toLowerCase())
-    const k = b.swap.kinds
-    for (const w of [...(k.includes('form') ? forms(b.swap.word) : []), ...(fn || !k.includes('syn') ? [] : thesaurus(b.swap.word, SWAPS))].slice(0, SWAPS)) menu[`swap: ${w}`] ??= `replace "${b.swap.word}" with "${w}"`
-  }
+  if (b.swap && !prefix && SWAP_ASK === 'off') for (const w of swapCandidates(b.swap)) menu[`swap: ${w}`] ??= `replace "${b.swap.word}" with "${w}"`
   // Words from the conversation the predictor doesn't know (names, jargon), offered once they match.
   for (const w of o.extra ?? []) if (w.startsWith(prefix)) menu[`word: ${w}`] ??= `append "${w}" (from the conversation)`
   // A lone letter is only a word if it's "a", "i" or a digit; otherwise committing it leaves a
@@ -552,6 +548,44 @@ export function fixQuestions(word: string, about = 'the last word of text_so_far
     fix_syn: noul(`Would you swap ${about} ("${word}") for a different word with a similar meaning, if you could?`),
   }
 }
+// A flagged word's replacements: its other forms, then (for content words) thesaurus entries.
+export function swapCandidates(swap: { word: string; kinds: SwapKind[] }): string[] {
+  const fn = FUNCTION_WORDS.has(swap.word.toLowerCase())
+  return [...(swap.kinds.includes('form') ? forms(swap.word) : []), ...(fn || !swap.kinds.includes('syn') ? [] : thesaurus(swap.word, SWAPS))].slice(0, SWAPS)
+}
+// How a flagged word's swaps are offered: on the next keyboard menu ('off'), or right away in
+// a call of their own, with a keep option ('keep') or without ('force').
+export const SWAP_ASK = (process.env.JEV_SWAP_ASK ?? 'off') as 'off' | 'keep' | 'force'
+const KEEP_WORD = '(keep it)'
+// One call for every branch with a flagged word: Jev picks its replacement (or keeps it), and the
+// pick is recorded as a step. Returns whether a call was made.
+export async function resolveSwaps(branches: Branch[], ctx: { question: string; conversation?: Post[] }): Promise<boolean> {
+  const flagged = branches.filter((b) => b.swap && swapCandidates(b.swap).length)
+  if (SWAP_ASK === 'off' || !flagged.length) return false
+  const ids = flagged.map((_, i) => `d${i}`)
+  const menus = flagged.map((b) => ({
+    ...(SWAP_ASK === 'keep' ? { [KEEP_WORD]: `keep "${b.swap!.word}"` } : {}),
+    ...Object.fromEntries(swapCandidates(b.swap!).map((w) => [`swap: ${w}`, `→ "${b.words.map((x, i) => (i === b.swap!.idx ? w : x)).join(' ')}"`])),
+  }))
+  const r = await jev().systemOne({
+    state: {
+      you: 'Jev, called JT on Bluesky, writing a reply one menu pick at a time',
+      ...(ctx.conversation?.length ? { conversation_so_far: ctx.conversation } : {}),
+      question: ctx.question,
+      drafts: Object.fromEntries(flagged.map((b, i) => [ids[i], b.words.map((x, j) => (j === b.swap!.idx ? `[${x}]` : x)).join(' ')])),
+    },
+    questions: Object.fromEntries(flagged.map((b, i) => [ids[i], choice(`In draft \`${ids[i]}\`, which word do you want in place of the bracketed "${b.swap!.word}"?`, menus[i])])),
+  })
+  flagged.forEach((b, i) => {
+    const a = r.answers[ids[i]] as { choice: string; confidence: number; probabilities: Record<string, number> }
+    if (a.choice !== KEEP_WORD) {
+      b.steps.push({ menu: Object.keys(menus[i]), pick: a.choice, confidence: a.confidence, probabilities: a.probabilities })
+      applyPick(b, a.choice)
+    } else b.swap = undefined
+  })
+  return true
+}
+
 // After a pick, flag the word for swapping if Jev wanted it changed and it is still there.
 export function flagSwap(b: Branch, target: { idx: number; word: string } | undefined, p: { fix?: number; fix_form?: number; fix_syn?: number }) {
   if (!target || b.words[target.idx] !== target.word) return
@@ -621,6 +655,7 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
     applyPick(b, a.choice)
     flagSwap(b, target, fixes)
     if (b.swap) log(`   would change "${b.swap.word}" (${b.swap.kinds.join('+')}; ${Object.entries(fixes).map(([k, v]) => `${k} ${((v ?? 0) * 100).toFixed(0)}%`).join(', ')})`)
+    if (await resolveSwaps([b], { question, conversation })) log(`   swap: ${b.steps.at(-1)!.pick.startsWith('swap: ') ? b.steps.at(-1)!.pick : 'kept'}`)
   }
   const last = b.steps.at(-1)
   return { question, answer: branchText(b), finished: !!last && isSpeak(last.pick) && (last.final ?? 1) >= 0.5, steps: b.steps }
