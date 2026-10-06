@@ -14,7 +14,13 @@ const POS = ['noun', 'verb', 'adj', 'adv'] as const
 class SortedFile {
   private fd?: number
   private size = 0
-  constructor(private path: () => string, private sep: string) {}
+  private path: () => string
+  private sep: string
+  // Plain fields, not parameter properties: Node's built-in type stripping rejects those.
+  constructor(path: () => string, sep: string) {
+    this.path = path
+    this.sep = sep
+  }
   private open() {
     if (this.fd === undefined) {
       this.fd = openSync(this.path(), 'r')
