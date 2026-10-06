@@ -197,6 +197,13 @@ export function predict(prev: string, prefix: string, n: number, common: number,
 }
 
 // --- Menu loop ---------------------------------------------------------------
+// Spell out the cost of a near-miss (JEV_LETTER_HINT=off drops this): picking a word that isn't quite
+// right and deleting it takes two picks, while one or two letters bring up better candidates.
+const LETTER_HINT = process.env.JEV_LETTER_HINT !== 'off'
+  ? `
+  If none of the predicted words is the one you want, don't pick a near miss and delete it later:
+  type its first letter or two, and the predictions will refill with words that start that way.`
+  : ''
 // The two control keys are offered as <end-word> and <end-phrase>, shaped unlike any word so
 // they can't be read as the words "space" or "speak" (JEV_KEYNAMES=classic restores those).
 // Transcripts and the trace image still call them SPACE and SPEAK.
@@ -211,7 +218,7 @@ menu option. Options are:
 - "word: X" — append the predicted word X to your sentence.
 - "letter: X" — type a letter to narrow the word predictions to words starting with what you've typed
   (use this when the word you want is not among the predictions). Any letter or digit can be typed, so
-  you can spell any word, then enter it as typed.
+  you can spell any word, then enter it as typed.${LETTER_HINT}
 - "key: X" — type the punctuation mark X: every mark on a keyboard, plus — and …, and any mark can be
   typed as often as you like.
 - "${SPACE}" — end the word you're typing, exactly as typed (after letters, punctuation or both).
