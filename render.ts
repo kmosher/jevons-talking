@@ -3,7 +3,7 @@
 // with one row per pick: the options passed over and the text as it stood afterwards.
 //
 // Usage: node --import tsx render.ts <transcript.json> [out.png] [--full]
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { Resvg } from '@resvg/resvg-js'
 import type { BeamTalk } from './beam.ts'
 import type { HybridTalk } from './hybrid.ts'
@@ -15,9 +15,12 @@ const ROW = 36
 const MAX_ROWS = 60
 const ALTERNATIVES = 4
 const C = { bg: '#f7f4ee', ink: '#1f3a5f', muted: '#8a94a3', orange: '#e8743b', chip: '#dce1e8', line: '#e2ddd2', red: '#c2453d' }
-const SANS = "'Helvetica Neue', Helvetica, Arial, sans-serif"
-const SERIF = "Georgia, 'Times New Roman', serif"
-const MONO = 'Menlo, Monaco, monospace'
+// resvg only tries the first family in a font-family list, so each environment names its own: the
+// container's Liberation fonts (see the Dockerfile; DejaVu fills in symbols like ⌫ and ✓), else macOS's.
+const LIBERATION = existsSync('/usr/share/fonts/truetype/liberation')
+const SANS = LIBERATION ? 'Liberation Sans' : "'Helvetica Neue'"
+const SERIF = LIBERATION ? 'Liberation Serif' : 'Georgia'
+const MONO = LIBERATION ? 'Liberation Mono' : 'Menlo'
 
 // resvg can't draw colour emoji (one in a line turned the whole headline into boxes), so the
 // image shows each as a :name:; the posted text keeps the emoji itself.
@@ -230,7 +233,7 @@ function finish(parts: string[], y: number): string {
 }
 
 export function renderPng(t: Talk, zoom = 2, full = false): { png: Buffer; width: number; height: number } {
-  const r = new Resvg(renderSvg(t, { full }), { fitTo: { mode: 'zoom', value: zoom }, font: { loadSystemFonts: true, defaultFontFamily: 'Helvetica Neue' } }).render()
+  const r = new Resvg(renderSvg(t, { full }), { fitTo: { mode: 'zoom', value: zoom }, font: { loadSystemFonts: true, fontDirs: ['/usr/share/fonts'], defaultFontFamily: LIBERATION ? 'Liberation Sans' : 'Helvetica Neue' } }).render()
   return { png: r.asPng(), width: r.width, height: r.height }
 }
 
