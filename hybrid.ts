@@ -6,7 +6,7 @@
 // Usage: npm run -s talk:hybrid -- [--q="..."] [--good=0.35]
 import { type BeamTalk, beam, rateDrafts } from './beam.ts'
 import { type Rewrite, rewrite } from './rewrite.ts'
-import { type Case, CASES, chooseCase, classify, isBare, unfamiliarWords, usefulWords, verdict, relevantContext, type Keyboard, type Mode, type Post, save, talk } from './talk.ts'
+import { type Case, CASES, chooseCase, classify, moderate, type Scores, isBare, unfamiliarWords, usefulWords, verdict, relevantContext, type Keyboard, type Mode, type Post, save, talk } from './talk.ts'
 
 const SINGLE_STEPS = 40
 // The single path's answer is kept if it rates at least this; otherwise the beam runs.
@@ -20,7 +20,7 @@ const BARE_BAR = 0.6
 export type HybridOptions = { keyboard?: Keyboard; keyboardBy?: 'mode' | 'jev'; mode?: Mode; conversation?: Post[]; good?: number; log?: (line: string) => void }
 // What was decided before writing started, for the trace image.
 export type Decisions = { mode: Mode; modeConfidence?: number; verdict?: { yes: number; word: string }; contextWords?: { word: string; p: number }[]; contextTotal: number; contextKept: number; dropped: Post[]; images: string[] }
-export type HybridTalk = BeamTalk & { rewrite?: Rewrite; case?: { case: Case; confidence: number }; conversation?: Post[]; path: 'single' | 'beam'; mode: Mode; keyboard: Keyboard; decisions: Decisions }
+export type HybridTalk = BeamTalk & { scores?: Scores; rewrite?: Rewrite; case?: { case: Case; confidence: number }; conversation?: Post[]; path: 'single' | 'beam'; mode: Mode; keyboard: Keyboard; decisions: Decisions }
 
 export async function hybrid(question: string, opts: HybridOptions = {}): Promise<HybridTalk> {
   let t: HybridTalk = { ...(await compose(question, opts)), conversation: opts.conversation }
@@ -38,6 +38,11 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
     const c = await chooseCase(question, t.answer, opts.conversation)
     opts.log?.(`case: ${c.case} (${(c.confidence * 100).toFixed(0)}%)`)
     t = { ...t, case: c, answer: CASES[c.case](t.answer), calls: t.calls + 1 }
+  }
+  if (process.env.JEV_MODERATE !== 'off' && t.answer) {
+    const scores = await moderate(question, t.answer, opts.conversation)
+    opts.log?.(`moderation: ${Object.entries(scores).map(([k, v]) => `${k} ${v.toFixed(1)}`).join(', ')}`)
+    t = { ...t, scores, calls: t.calls + 1 }
   }
   return t
 }

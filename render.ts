@@ -19,7 +19,14 @@ const SANS = "'Helvetica Neue', Helvetica, Arial, sans-serif"
 const SERIF = "Georgia, 'Times New Roman', serif"
 const MONO = 'Menlo, Monaco, monospace'
 
-const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+// resvg can't draw colour emoji (one in a line turned the whole headline into boxes), so the
+// image shows each as a :name:; the posted text keeps the emoji itself.
+const EMOJI_NAMES: Record<string, string> = {
+  '🙂': 'smile', '😂': 'joy', '🤔': 'thinking', '😢': 'cry', '😡': 'rage', '😱': 'scream', '👍': '+1', '👎': '-1', '🙏': 'pray',
+  '🎉': 'tada', '🔥': 'fire', '✨': 'sparkles', '👀': 'eyes', '🤖': 'robot', '🐢': 'turtle', '🌙': 'moon', '💀': 'skull', '🤷': 'shrug',
+}
+const deEmoji = (s: string) => s.replace(/\p{Extended_Pictographic}\uFE0F?/gu, (e) => `:${EMOJI_NAMES[e.replace('\uFE0F', '')] ?? 'emoji'}:`)
+const esc = (s: string) => deEmoji(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 // Rough advance width; good enough for sizing chips.
 const textWidth = (s: string, size: number) => [...s].reduce((w, ch) => w + (/[A-Z]/.test(ch) ? 0.72 : 0.56), 0) * size
@@ -42,7 +49,7 @@ function replay(steps: Step[], prefill: string[] = []): { text: string; prefix: 
 
 function chip(x: number, y: number, text: string, opts: { fill: string; ink: string; stroke?: string; size?: number; bold?: boolean; family?: string; opacity?: number }) {
   const size = opts.size ?? 15
-  const w = textWidth(text, size) + 18
+  const w = textWidth(deEmoji(text), size) + 18
   const stroke = opts.stroke ? ` stroke="${opts.stroke}" stroke-width="2"` : ''
   return {
     w,
@@ -125,6 +132,7 @@ export function renderSvg(t: Talk, { full = false } = {}): string {
       ...d.images.map((img) => `saw: "${clip(img, full ? 200 : 60)}"`),
       ...((t as Partial<HybridTalk>).rewrite?.kept === 'after' ? [`rewrote: ${(t as HybridTalk).rewrite!.edits.map((e) => `${e.from} → ${e.to || '∅'}`).join(', ')}`] : []),
       ...((t as Partial<HybridTalk>).case && (t as HybridTalk).case!.case !== 'lower' ? [`case: ${(t as HybridTalk).case!.case} ${Math.round((t as HybridTalk).case!.confidence * 100)}%`] : []),
+      ...((t as Partial<HybridTalk>).scores ? [modLine((t as HybridTalk).scores!)] : []),
       ...(path ? [`path: ${path === 'beam' ? `beam → ${Object.keys((t as Partial<HybridTalk>).judged ?? {}).length} drafts` : 'single draft'}`] : []),
     ]
     parts.push(`<text x="${PAD}" y="${y - 2}" font-family="${SANS}" font-size="14" fill="${C.ink}">${esc(bits.join('  ·  '))}</text>`)
@@ -160,7 +168,7 @@ export function renderSvg(t: Talk, { full = false } = {}): string {
   for (const step of t.steps) {
     const k = kind(step.pick)
     const text = k === 'backspace' ? '⌫' : withdrawn(step) ? 'SPEAK?✗' : label(step.pick)
-    const w = Math.max(KEY_H, textWidth(text, 16) + 14)
+    const w = Math.max(KEY_H, textWidth(deEmoji(text), 16) + 14)
     if (x + w > W - PAD) {
       x = PAD
       y += LINE_H
@@ -218,6 +226,13 @@ if (import.meta.main) {
 // or recased, so compare against the text before the rewrite, ignoring case.
 const isChosen = (t: Talk, draft: string) => draft.toLowerCase() === ((t as Partial<HybridTalk>).rewrite?.before ?? t.answer).toLowerCase()
 
+// Slashdot-style moderation, e.g. "Funny 3.2 · Insightful 1.0", strongest first.
+const modLine = (s: Record<string, number>) =>
+  Object.entries(s)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `${k[0].toUpperCase()}${k.slice(1)} ${v.toFixed(1)}`)
+    .join(' · ')
+
 // --- Alt text ------------------------------------------------------------------
 export const pickLabel = (step: Step) =>
   step.pick === 'backspace'
@@ -258,6 +273,7 @@ export function altText(t: Talk): string {
   } else if (h.path) lines.push(`Path: single draft${judged[0] ? `, rated ${altPct(judged[0][1])} by a fresh Jev` : ''}.`)
   if (h.rewrite?.kept === 'after') lines.push(`Rewritten after: ${h.rewrite.edits.map((e) => `${e.from} → ${e.to || '(deleted)'}`).join(', ')}.`)
   if (h.case && h.case.case !== 'lower') lines.push(`Jev chose ${h.case.case === 'shout' ? 'ALL CAPS' : 'sentence case'} (${altPct(h.case.confidence)}).`)
+  if (h.scores) lines.push(`Self-moderated, 0 to 5: ${modLine(h.scores)}.`)
   lines.push(`${t.steps.length} picks, ${h.calls ?? '?'} Jev calls, mean confidence ${meanConfidence(t).toFixed(2)}.`)
   let alt = lines.join('\n')
   let keys = '\nKeys pressed:'

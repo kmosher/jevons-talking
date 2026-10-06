@@ -25,7 +25,7 @@ import { choice, noul, TypeSafeClient } from '@typesafe-ai/sdk'
 import { thesaurus } from './wordnet.ts'
 import { chunkOf, dasherMenu } from './dasher.ts'
 
-export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number; fix?: number; cased?: string }
+export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number; fix?: number; cased?: string; scores?: Scores }
 export type Talk = { question: string; answer: string; finished: boolean; steps: Step[] }
 // A context entry. Images (descriptions plus alt text) and JT's rejected drafts ride in their
 // own fields, not inside the text, so Jev can tell what was said from what was seen or tried.
@@ -259,6 +259,11 @@ export const MODES = {
     instruction: `Your verdict on the yes-or-no question is already typed. Justify it in a few words, then pick ${SPEAK}.`,
     judge: 'a good answer to the yes-or-no question, with a reason',
   },
+  ask: {
+    when: 'it asks you to ask something, or the best reply is a question of your own back',
+    instruction: `Reply with a short question of your own, then pick ${SPEAK}.`,
+    judge: 'a good question to ask in reply',
+  },
   acknowledge: {
     when: 'it is thanks, praise, a greeting or a goodbye',
     instruction: `Reply graciously in a few words, then pick ${SPEAK}.`,
@@ -400,6 +405,8 @@ function topFollower(w: string): string | null {
 }
 
 // Every punctuation mark on a US keyboard, plus en and em dashes and an ellipsis.
+const EMOJI_ON = process.env.JEV_EMOJI === 'on'
+const EMOJI = [...'🙂😂🤔😢😡😱👍👎🙏🎉🔥✨👀🤖🐢🌙💀🤷'].filter((c) => c.trim())
 const PUNCTUATION = [...'.,?!:;\'"-–—…()[]{}/\\&*@#$%^+=_~<>|`']
 
 export type MenuOptions = { words: number; common: number; minWordsToSpeak: number; phrases?: number; keyboard?: Keyboard; extra?: string[] }
@@ -464,6 +471,8 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   if (committable && !isBlocked(prefix)) menu[`word: ${prefix}`] ??= `enter "${prefix}" as typed`
   for (const l of keyboard === 'letters' ? [...letters, ...PAIRS] : letters) menu[`letter: ${l}`] = `narrow predictions to words starting "${prefix + l}"`
   for (const p of PUNCTUATION) menu[`key: ${p}`] = `type "${p}"`
+  // With JEV_EMOJI=on, a few emoji, each added as a word of its own.
+  if (EMOJI_ON) for (const e of EMOJI) menu[`word: ${e}`] ??= `add the emoji ${e}`
   if (committable) menu[SPACE] = `end the word "${prefix}" as typed`
   if (prefix || words.length > b.locked) menu.backspace = prefix ? `delete the typed letter "${prefix.at(-1)}"` : `delete "${words.at(-1)}"`
   if (words.filter((w) => /\w/.test(w)).length >= o.minWordsToSpeak && !prefix) menu[SPEAK] = 'finish and speak the text aloud'
@@ -675,7 +684,7 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
     const state = { instructions: extraInstructions ? `${instructionsFor(mode, keyboard)}\n${extraInstructions}` : instructionsFor(mode, keyboard), ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recentActions(b), ...typingState(b, maxSteps) }
     const target = swappable(b)
     const caseT = caseTarget(b)
-    const questions = { next: choice('Which menu option do you pick next?', menu), ...(target ? fixQuestions(target.word) : {}), ...(caseT ? { case: caseQuestion(caseT.word) } : {}) }
+    const questions = { next: choice('Which menu option do you pick next?', menu), ...(target ? fixQuestions(target.word) : {}), ...(caseT ? { case: caseQuestion(caseT.word) } : {}), ...(MODERATE_EVERY && b.words.length ? rubricQuestions('text_so_far as a reply') : {}) }
     if (dryRun) {
       console.log(JSON.stringify({ state, questions }, null, 2))
       break
@@ -685,7 +694,8 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
     const fixes = Object.fromEntries(['fix', 'fix_form', 'fix_syn'].filter((k) => k in r.answers).map((k) => [k, ((r.answers as Record<string, unknown>)[k] as { noul: number }).noul])) as { fix?: number; fix_form?: number; fix_syn?: number }
     const fixVals = Object.values(fixes)
     const fix = fixVals.length ? Math.max(...fixVals) : undefined
-    b.steps.push({ menu: Object.keys(menu), pick: a.choice, confidence: a.confidence, probabilities: a.probabilities, ...(fix !== undefined ? { fix } : {}) })
+    const stepScores = MODERATE_EVERY ? readScores(r.answers as Record<string, unknown>) : undefined
+    b.steps.push({ menu: Object.keys(menu), pick: a.choice, confidence: a.confidence, probabilities: a.probabilities, ...(fix !== undefined ? { fix } : {}), ...(stepScores ? { scores: stepScores } : {}) })
     log(`${String(step + 1).padStart(2)} ${a.choice.padEnd(16)} conf=${a.confidence.toFixed(2)}  | ${branchText(b)}${b.prefix ? ' ' + b.prefix + '…' : ''}`)
 
     // The last word's casing is answered in the same call as SPEAK, so apply it before stopping.
@@ -741,6 +751,29 @@ export const CASES = {
   shout: (t: string) => t.toUpperCase(),
 } as const
 export type Case = keyof typeof CASES
+// Slashdot-style self-moderation: a fresh Jev scores the finished reply 0-5 on each rubric.
+// JEV_MODERATE=off skips it; JEV_MODERATE=every also scores the text so far on every pick.
+export const RUBRICS = ['funny', 'insightful', 'informative', 'interesting'] as const
+export type Scores = Record<(typeof RUBRICS)[number], number>
+const SCORE_OPTIONS = Object.fromEntries([0, 1, 2, 3, 4, 5].map((n) => [String(n), `${n} out of 5`]))
+export const rubricQuestions = (what: string) =>
+  Object.fromEntries(RUBRICS.map((r) => [`score_${r}`, choice(`Slashdot-style, how ${r} is ${what}, from 0 to 5?`, SCORE_OPTIONS)]))
+// Each score is the expected value over Jev's probabilities, so it isn't stuck on whole numbers.
+export const readScores = (answers: Record<string, unknown>): Scores | undefined => {
+  if (!RUBRICS.every((r) => answers[`score_${r}`])) return undefined
+  return Object.fromEntries(
+    RUBRICS.map((r) => [r, Object.entries((answers[`score_${r}`] as { probabilities: Record<string, number> }).probabilities).reduce((s, [k, p]) => s + Number(k) * p, 0)]),
+  ) as Scores
+}
+export async function moderate(question: string, answer: string, conversation?: Post[]): Promise<Scores> {
+  const r = await jev().systemOne({
+    state: { ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, reply: answer },
+    questions: rubricQuestions('the reply'),
+  })
+  return readScores(r.answers as Record<string, unknown>)!
+}
+export const MODERATE_EVERY = process.env.JEV_MODERATE === 'every'
+
 export async function chooseCase(question: string, answer: string, conversation?: Post[]): Promise<{ case: Case; confidence: number }> {
   const r = await jev().systemOne({
     state: { you: 'Jev, called JT on Bluesky', ...(conversation?.length ? { conversation_so_far: conversation } : {}), message: question, your_reply: answer },
