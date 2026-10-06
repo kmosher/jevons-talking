@@ -725,10 +725,11 @@ const STATE_V2 = process.env.JEV_STATE === 'v2'
 const PREVIEW = process.env.JEV_PREVIEW !== 'off'
 const LATE_BUDGET = process.env.JEV_PICK_BUDGET === 'late'
 const PICKS_WARNING = 10
-// JEV_ECHO_WEIGHT=<w>: a predicted word taken from the question has its probability multiplied by
-// w before the pick is made, so an echo wins only when Jev clearly prefers it over everything else.
-// Common words ("is", "the", "you") are exempt.
-export const ECHO_WEIGHT = Number(process.env.JEV_ECHO_WEIGHT ?? 1)
+// A predicted word taken from the question has its probability multiplied by ECHO_WEIGHT before
+// the pick is made, so an echo wins only when Jev clearly prefers it over everything else (1 turns
+// this off). Common words ("is", "the", "you") are exempt. At 0.3, replies echoed less, rated a
+// little higher and took fewer calls, since fewer drafts ended in the beam.
+export const ECHO_WEIGHT = Number(process.env.JEV_ECHO_WEIGHT ?? 0.3)
 const COMMON_WORDS = new Set([...unigram].sort((x, y) => y[1] - x[1]).slice(0, 150).map(([w]) => w))
 const questionWords = (question: string) => new Set((question.toLowerCase().match(/[a-z][a-z0-9']*/g) ?? []).filter((w) => !COMMON_WORDS.has(w) && !['i', 'you', 'your', "you're"].includes(w)))
 export function steerFromEcho<T extends { choice: string; confidence: number; probabilities: Record<string, number> }>(a: T, question: string): T {
