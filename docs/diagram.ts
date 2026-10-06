@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs'
 import { Resvg } from '@resvg/resvg-js'
 
 const W = 1200
-const NAVY = '#1f3a5f', ORANGE = '#e8743b', BG = '#f7f4ee', INK = '#1f3a5f', MUTED = '#7d8796', CHIP = '#dce1e8', LINE = '#c9c2b4'
+const NAVY = '#1f3a5f', ORANGE = '#e8743b', BG = '#f7f4ee', INK = '#1f3a5f', MUTED = '#7d8796'
 const SANS = "'Helvetica Neue', Helvetica, Arial, sans-serif"
 const SERIF = "Georgia, 'Times New Roman', serif"
 const MONO = 'Menlo, monospace'
@@ -18,7 +18,9 @@ function key(x: number, y: number, w: number, h: number, badge: 'JEV' | 'CODE' |
   parts.push(`<rect x="${x + 16}" y="${y + 16}" width="${badge.length * 11 + 18}" height="24" rx="6" fill="${accent}"/>`)
   parts.push(`<text x="${x + 25}" y="${y + 33}" font-family="${MONO}" font-size="14" font-weight="700" fill="#fff">${badge}</text>`)
   parts.push(`<text x="${x + badge.length * 11 + 46}" y="${y + 35}" font-family="${SANS}" font-size="21" font-weight="700" fill="${INK}">${esc(title)}</text>`)
-  lines.forEach((l, i) => parts.push(`<text x="${x + 18}" y="${y + 66 + i * 23}" font-family="${SANS}" font-size="16" fill="${INK}">${esc(l)}</text>`))
+  lines.forEach((l, i) => {
+    parts.push(`<text x="${x + 18}" y="${y + 66 + i * 23}" font-family="${SANS}" font-size="16" fill="${INK}">${esc(l)}</text>`)
+  })
 }
 function arrow(x1: number, y1: number, x2: number, y2: number, label = '') {
   parts.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2 - 10}" stroke="${NAVY}" stroke-width="3"/>`)

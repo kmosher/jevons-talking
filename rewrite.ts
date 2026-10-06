@@ -18,7 +18,7 @@ const DROP = '(delete it)'
 export async function rewrite(question: string, answer: string, opts: { conversation?: Post[]; mode?: Mode; extraWords?: string[]; locked?: number; log?: (l: string) => void } = {}): Promise<Rewrite | undefined> {
   const { conversation, mode = 'answer', extraWords = [], locked = 0, log = () => {} } = opts
   const words = answer.split(/\s+/).filter(Boolean)
-  const editable = words.map((w, i) => i).filter((i) => i >= locked && /[a-z0-9]/i.test(words[i]))
+  const editable = words.map((_, i) => i).filter((i) => i >= locked && /[a-z0-9]/i.test(words[i]))
   if (!editable.length) return undefined
   const state = { you: 'Jev, called JT on Bluesky', ...(conversation?.length ? { conversation_so_far: conversation } : {}), message: question, your_reply: answer, words_of_your_reply: words }
   const r = await jev().systemOne({

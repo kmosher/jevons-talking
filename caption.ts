@@ -20,14 +20,15 @@ const DTYPE = DTYPE_ENV.startsWith('{') ? JSON.parse(DTYPE_ENV) : DTYPE_ENV
 const DEVICE = process.env.JEV_CAPTION_DEVICE ?? 'cpu'
 if (process.env.JEV_MODEL_CACHE) env.cacheDir = process.env.JEV_MODEL_CACHE
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// transformers.js's Florence types don't cover generate() and post_process_generation().
+// biome-ignore lint/suspicious/noExplicitAny: untyped library objects
 type Florence = { model: any; processor: any }
 let loading: Promise<Florence> | undefined
 // Starts loading on the first call; later calls share it. A failed load is retried next time.
 export function loadCaptioner(): Promise<Florence> {
   loading ??= (async () => {
     const [model, processor] = await Promise.all([
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // biome-ignore lint/suspicious/noExplicitAny: its options type lacks per-module dtype maps
       Florence2ForConditionalGeneration.from_pretrained(MODEL, { dtype: DTYPE, device: DEVICE } as any),
       AutoProcessor.from_pretrained(MODEL),
     ])

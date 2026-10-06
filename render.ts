@@ -275,7 +275,7 @@ export function altText(t: Talk): string {
   if (h.case && h.case.case !== 'lower') lines.push(`Jev chose ${h.case.case === 'shout' ? 'ALL CAPS' : 'sentence case'} (${altPct(h.case.confidence)}).`)
   if (h.scores) lines.push(`Self-moderated, 0 to 5: ${modLine(h.scores)}.`)
   lines.push(`${t.steps.length} picks, ${h.calls ?? '?'} Jev calls, mean confidence ${meanConfidence(t).toFixed(2)}.`)
-  let alt = lines.join('\n')
+  const alt = lines.join('\n')
   let keys = '\nKeys pressed:'
   for (const s of t.steps) {
     const k = ` ${pickLabel(s)},`

@@ -333,13 +333,13 @@ export async function classify(
 export const RELEVANT = 0.5
 export async function relevantContext(conversation: Post[]): Promise<{ kept: Post[]; dropped: Post[]; trimmed: string[] }> {
   const last = conversation.length - 1
-  const threadIdx = conversation.map((p, i) => i).filter((i) => i < last && !p_isLinked(conversation[i]))
+  const threadIdx = conversation.map((_, i) => i).filter((i) => i < last && !p_isLinked(conversation[i]))
   const parent = threadIdx.at(-1)
   const lastOwn = [...threadIdx].reverse().find((i) => conversation[i].author === 'you')
   const always = new Set([last, parent, lastOwn].filter((i): i is number => i !== undefined))
   const scored = threadIdx.filter((i) => !always.has(i) && conversation[i].author !== '…')
   // Each post's extras are rated on their own: most replies don't need the drafts JT passed over.
-  const withDrafts = conversation.map((p, i) => i).filter((i) => conversation[i].rejected_drafts?.length)
+  const withDrafts = conversation.map((_, i) => i).filter((i) => conversation[i].rejected_drafts?.length)
   if (!scored.length && !withDrafts.length) return { kept: conversation, dropped: [], trimmed: [] }
   const r = await jev().systemOne({
     state: {
@@ -716,7 +716,7 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
     const fix = fixVals.length ? Math.max(...fixVals) : undefined
     const stepScores = MODERATE_EVERY ? readScores(r.answers as Record<string, unknown>) : undefined
     b.steps.push({ menu: Object.keys(menu), pick: a.choice, confidence: a.confidence, probabilities: a.probabilities, ...(fix !== undefined ? { fix } : {}), ...(stepScores ? { scores: stepScores } : {}) })
-    log(`${String(step + 1).padStart(2)} ${a.choice.padEnd(16)} conf=${a.confidence.toFixed(2)}  | ${branchText(b)}${b.prefix ? ' ' + b.prefix + '…' : ''}`)
+    log(`${String(step + 1).padStart(2)} ${a.choice.padEnd(16)} conf=${a.confidence.toFixed(2)}  | ${branchText(b)}${b.prefix ? ` ${b.prefix}…` : ''}`)
 
     // The last word's casing is answered in the same call as SPEAK, so apply it before stopping.
     if (isSpeak(a.choice)) {

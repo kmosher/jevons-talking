@@ -18,9 +18,9 @@ import { hostname } from 'node:os'
 import { AppBskyFeedDefs, AtpAgent, RichText } from '@atproto/api'
 import type { BeamTalk } from './beam.ts'
 import { describeImage, loadCaptioner } from './caption.ts'
-import { type HybridTalk, hybrid } from './hybrid.ts'
+import { hybrid } from './hybrid.ts'
 import { altText, pickLabel, rejectedDrafts, renderPng } from './render.ts'
-import { containsBlocked, isSpace, isSpeak, meanConfidence, type Post, type Role, save, type Step, type Talk } from './talk.ts'
+import { containsBlocked, meanConfidence, type Post, type Role, save, type Talk } from './talk.ts'
 
 const HANDLE = process.env.BLUESKY_HANDLE ?? 'jevons-talking.bsky.social'
 const PASSWORD = process.env.BLUESKY_APP_PASSWORD

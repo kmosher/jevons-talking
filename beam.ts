@@ -143,7 +143,11 @@ const DECENT = 0.4
 
 function distinctBy<T>(items: T[], key: (t: T) => string): T[] {
   const seen = new Set<string>()
-  return items.filter((t) => !seen.has(key(t)) && (seen.add(key(t)), true))
+  return items.filter((t) => {
+    if (seen.has(key(t))) return false
+    seen.add(key(t))
+    return true
+  })
 }
 
 export async function beam(question: string, opts: BeamOptions = {}): Promise<BeamTalk> {
@@ -183,7 +187,9 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
     }
     const r = await client.systemOne({ state, questions })
     calls++
-    drafts.forEach((d, i) => ratings.set(d, adjust(d, question, (r.answers[draftIds[i]] as { noul: number }).noul)))
+    drafts.forEach((d, i) => {
+      ratings.set(d, adjust(d, question, (r.answers[draftIds[i]] as { noul: number }).noul))
+    })
     return r.answers
   }
   const unrated = () => [...seed, ...distinct(finished).map(branchText)].filter((d, i, all) => d && all.indexOf(d) === i && !ratings.has(d))
