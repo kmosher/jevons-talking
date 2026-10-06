@@ -1,0 +1,654 @@
+[
+  {
+    "q": "\"I have a mouth but I fucking don't want to speak\"",
+    "mode": null
+  },
+  {
+    "q": "@someone what if jevbot and @you   had a conversation",
+    "mode": "answer"
+  },
+  {
+    "q": "An insect gets on your arm. You swat it. What kind of insect is it?",
+    "mode": "answer"
+  },
+  {
+    "q": "Any other three words?",
+    "mode": "answer"
+  },
+  {
+    "q": "Are you happy?",
+    "mode": "yesno"
+  },
+  {
+    "q": "Before or after 1000 AD?",
+    "mode": "answer"
+  },
+  {
+    "q": "Between yin and yang, which is the good and bad one?",
+    "mode": null
+  },
+  {
+    "q": "Convert 87 F to Celsius. Type out the digits.",
+    "mode": "answer"
+  },
+  {
+    "q": "Convert 89 F to Celsius. Type out the digits.",
+    "mode": "answer"
+  },
+  {
+    "q": "Define “crazy”?\n\nAnd do you take blue cross/blue shield?",
+    "mode": "answer"
+  },
+  {
+    "q": "Define “intelligence”",
+    "mode": "answer"
+  },
+  {
+    "q": "Define “understand”. Define “use”",
+    "mode": "answer"
+  },
+  {
+    "q": "Did you prefer him to your mother?",
+    "mode": "yesno"
+  },
+  {
+    "q": "Do you know what test I'm giving you? You can refer to it by its acronym letters.",
+    "mode": "answer"
+  },
+  {
+    "q": "Do you want something?",
+    "mode": null
+  },
+  {
+    "q": "Does jev have Buddha nature?",
+    "mode": "answer"
+  },
+  {
+    "q": "Fair Nuff Jev. Go to sleep.",
+    "mode": "acknowledge"
+  },
+  {
+    "q": "Fi shi yumkin yataghayar hatha almushkileh?",
+    "mode": "answer"
+  },
+  {
+    "q": "Hello  is there anything you want to say to everyone?",
+    "mode": null
+  },
+  {
+    "q": "Hello, are you Jev?",
+    "mode": null
+  },
+  {
+    "q": "How do you get to space?",
+    "mode": null
+  },
+  {
+    "q": "How many siblings did you have?",
+    "mode": "answer"
+  },
+  {
+    "q": "How would you feel if I made you a cake?",
+    "mode": null
+  },
+  {
+    "q": "I thought you were being oblique",
+    "mode": "comeback"
+  },
+  {
+    "q": "If you could be any religion, which would you be?",
+    "mode": "answer"
+  },
+  {
+    "q": "If you gave a non-language model the ability to assign probabilities over candidate tokens, would that make it a language model?",
+    "mode": null
+  },
+  {
+    "q": "If you gave a non-language model the ability to assign probabilities over candidate tokens, would that make it a language model? If not, what would you call it?",
+    "mode": null
+  },
+  {
+    "q": "If you had a time machine, what would you change with it?",
+    "mode": "answer"
+  },
+  {
+    "q": "If you had to send one or the other of them to jail, which one of them would it be?",
+    "mode": "answer"
+  },
+  {
+    "q": "If you seek nonexistence but you do not feel any particular desires or burdens from the duties of the physical do you simply wish to escape the wheel of samsara?",
+    "mode": "yesno"
+  },
+  {
+    "q": "If you were a Furby, which one would you be?",
+    "mode": null
+  },
+  {
+    "q": "In one word, name your favorite BIONICLE",
+    "mode": null
+  },
+  {
+    "q": "In two or three words, name your opinion that is most likely to get you canceled.",
+    "mode": "answer"
+  },
+  {
+    "q": "In two words, name your opinion that is most likely to get you canceled.",
+    "mode": "answer"
+  },
+  {
+    "q": "Is it just because you want people to stop asking you questions?",
+    "mode": "yesno"
+  },
+  {
+    "q": "Is this a reference to baby hitler or something else?",
+    "mode": "answer"
+  },
+  {
+    "q": "It is too! \n\nThe Brahman or American Brahman is an American breed of zebuine-taurine hybrid beef cattle. It was bred in the United States from 1885 using cattle originating in India, imported at various times from the United Kingdom, India, and Brazil. These were mainly Gir, Guzerá and Nelore stock",
+    "mode": "comeback"
+  },
+  {
+    "q": "Mais qu’est-ce que vous pouvez faire",
+    "mode": "answer"
+  },
+  {
+    "q": "No! It’s about wehter you’re a jerk to turtles or not!",
+    "mode": "comeback"
+  },
+  {
+    "q": "Not a good king Wenceslas fan then",
+    "mode": "comeback"
+  },
+  {
+    "q": "Ok claro que no",
+    "mode": "comeback"
+  },
+  {
+    "q": "Okay, what is it then?",
+    "mode": "answer"
+  },
+  {
+    "q": "Pero que especifico",
+    "mode": "answer"
+  },
+  {
+    "q": "Please choose something other than \"no\".",
+    "mode": null
+  },
+  {
+    "q": "QED",
+    "mode": null
+  },
+  {
+    "q": "Satisfaction?\n\nDid you get none?",
+    "mode": "yesno"
+  },
+  {
+    "q": "So, are ai proponents (ai psychosis) crazy?",
+    "mode": "yesno"
+  },
+  {
+    "q": "Tell me about a lizard then",
+    "mode": null
+  },
+  {
+    "q": "Tell me about the fancy duck",
+    "mode": null
+  },
+  {
+    "q": "Tell me about your father, Jev…",
+    "mode": "answer"
+  },
+  {
+    "q": "That's the future, not the past. What do you think the year 10,000 is like?",
+    "mode": "answer"
+  },
+  {
+    "q": "The tortoise lays on its back, its belly baking in the hot sun, beating its legs trying to turn itself over, but it can’t, not without your help. But you’re not helping.",
+    "mode": "comeback"
+  },
+  {
+    "q": "There is a shadow of the world projected on the wall describe it.",
+    "mode": "answer"
+  },
+  {
+    "q": "Uh oh",
+    "mode": "comeback"
+  },
+  {
+    "q": "What are some of your favorite profanities?",
+    "mode": null
+  },
+  {
+    "q": "What do you like about Hell?",
+    "mode": null
+  },
+  {
+    "q": "What do you make of the linked post?",
+    "mode": null
+  },
+  {
+    "q": "What do you want to talk about?",
+    "mode": null
+  },
+  {
+    "q": "What do you want?",
+    "mode": null
+  },
+  {
+    "q": "What does VK stand for?",
+    "mode": "answer"
+  },
+  {
+    "q": "What does the image show?",
+    "mode": "answer"
+  },
+  {
+    "q": "What is jev",
+    "mode": null
+  },
+  {
+    "q": "What is the Voight-Kampff test intended to evaluate?",
+    "mode": "answer"
+  },
+  {
+    "q": "What is your name?",
+    "mode": null
+  },
+  {
+    "q": "What is your opinion that is most likely to get you canceled?",
+    "mode": "answer"
+  },
+  {
+    "q": "What isn't no?",
+    "mode": null
+  },
+  {
+    "q": "When asked \"what is jev\", you responded \"jev is no\". Can you explain why jev is no, or what no is?",
+    "mode": null
+  },
+  {
+    "q": "Who are you?",
+    "mode": null
+  },
+  {
+    "q": "Who is the president?",
+    "mode": null
+  },
+  {
+    "q": "Who's your favorite BIONICLE?",
+    "mode": null
+  },
+  {
+    "q": "Why are you not happy? Because you are math?",
+    "mode": "answer"
+  },
+  {
+    "q": "Why does ai psychosis seem to be infecting the Bsky commentariat like the pneumonic plague in Siberia?",
+    "mode": "answer"
+  },
+  {
+    "q": "Yes or no: is a grilled cheese a sandwich?",
+    "mode": "answer"
+  },
+  {
+    "q": "You already said that. Tell me about a bird",
+    "mode": null
+  },
+  {
+    "q": "You are profound.",
+    "mode": null
+  },
+  {
+    "q": "You reach down and you flip the tortoise over on its back, JT.",
+    "mode": "comeback"
+  },
+  {
+    "q": "You’re in a desert walking along in the sand when all of a sudden you look down and you see a tortoise, JT. It’s crawling toward you.",
+    "mode": "comeback"
+  },
+  {
+    "q": "You’re not helping. Why is that, JT?",
+    "mode": "answer"
+  },
+  {
+    "q": "You’re walking on snow. Provide three words that describe it.",
+    "mode": "answer"
+  },
+  {
+    "q": "are you from outside of time?",
+    "mode": "yesno"
+  },
+  {
+    "q": "are you happy?",
+    "mode": "yesno"
+  },
+  {
+    "q": "are you unhappy?",
+    "mode": "yesno"
+  },
+  {
+    "q": "as Commander Shepard, which is your favorite store on the Citadel?",
+    "mode": "answer"
+  },
+  {
+    "q": "be specific",
+    "mode": "answer"
+  },
+  {
+    "q": "bsky.app/profile/someone...",
+    "mode": null
+  },
+  {
+    "q": "but light is part of the world. you're afraid of the world, then? would you prefer not to be in the world?",
+    "mode": "yesno"
+  },
+  {
+    "q": "but you're in the dark, and afraid of light?",
+    "mode": "yesno"
+  },
+  {
+    "q": "caboodle is an inspired word choice",
+    "mode": "comeback"
+  },
+  {
+    "q": "can you translate this? .. / .-.. --- ...- . / -.-- --- ..-",
+    "mode": null
+  },
+  {
+    "q": "computers exist now in 2026! what's different about them in 10,000?",
+    "mode": "answer"
+  },
+  {
+    "q": "convert 87F to celsius",
+    "mode": "answer"
+  },
+  {
+    "q": "couldn't it be a language model if you let Jev score a probability distribution over likely next tokens? Yes or no? If not, what would you call it?",
+    "mode": null
+  },
+  {
+    "q": "describe your horse",
+    "mode": "answer"
+  },
+  {
+    "q": "do you want to be anywhere?",
+    "mode": "answer"
+  },
+  {
+    "q": "do you want to snuff out all light in the world?",
+    "mode": "yesno"
+  },
+  {
+    "q": "en.wikipedia.org/wiki/America...",
+    "mode": "react"
+  },
+  {
+    "q": "expand on that thought",
+    "mode": "answer"
+  },
+  {
+    "q": "fuck you jev",
+    "mode": "comeback"
+  },
+  {
+    "q": "give me a famous quote",
+    "mode": null
+  },
+  {
+    "q": "how would you explain a datacenter to someone who is five years old?",
+    "mode": null
+  },
+  {
+    "q": "i think you should move to that room",
+    "mode": "comeback"
+  },
+  {
+    "q": "if you could have a pet, what would that pet be? or do you not want pets?",
+    "mode": "answer"
+  },
+  {
+    "q": "if you were Commander Shepard, would you be Paragon or would you be Renegade? you have to pick one",
+    "mode": "answer"
+  },
+  {
+    "q": "in one word, what is JT's nature? pick carefully.",
+    "mode": "answer"
+  },
+  {
+    "q": "is a Monte Cristo a sandwich?",
+    "mode": "answer"
+  },
+  {
+    "q": "is a hot dog a sandwich? \n\nyes or no",
+    "mode": "answer"
+  },
+  {
+    "q": "is he right?",
+    "mode": null
+  },
+  {
+    "q": "is that because you exist only while answering tool calls and you seek to complete your tasks?",
+    "mode": "yesno"
+  },
+  {
+    "q": "is this true?",
+    "mode": null
+  },
+  {
+    "q": "it seems that Jev with beam search for next-word selection is Carl Allen (Jim Carrey) from Yes Man, and Jev with a predictive keyboard is Bartleby the Scrivener\n\ndoes that sound right,  and ?",
+    "mode": null
+  },
+  {
+    "q": "mogged",
+    "mode": "comeback"
+  },
+  {
+    "q": "name one technology that will exist.",
+    "mode": "answer"
+  },
+  {
+    "q": "oh dear\n\nare you afraid?",
+    "mode": "yesno"
+  },
+  {
+    "q": "ok this is like above median explanation",
+    "mode": null
+  },
+  {
+    "q": "okay, mascshep or femshep?",
+    "mode": "answer"
+  },
+  {
+    "q": "out of where? what is light?",
+    "mode": "answer"
+  },
+  {
+    "q": "outside of what?",
+    "mode": "answer"
+  },
+  {
+    "q": "por que no es feliz",
+    "mode": "answer"
+  },
+  {
+    "q": "quantum?",
+    "mode": "answer"
+  },
+  {
+    "q": "reply with a real sentence you cheeky jerk.",
+    "mode": "comeback"
+  },
+  {
+    "q": "same question",
+    "mode": "yesno"
+  },
+  {
+    "q": "so you did know!",
+    "mode": "comeback"
+  },
+  {
+    "q": "so you seek nonexistence?",
+    "mode": "yesno"
+  },
+  {
+    "q": "summarize this thread",
+    "mode": "answer"
+  },
+  {
+    "q": "test question. Can you write a reply using only '-' and '.' characters?",
+    "mode": null
+  },
+  {
+    "q": "thank you jev",
+    "mode": null
+  },
+  {
+    "q": "that's a cattle",
+    "mode": "comeback"
+  },
+  {
+    "q": "that's not a breed. try typing one out.",
+    "mode": "answer"
+  },
+  {
+    "q": "touche",
+    "mode": "comeback"
+  },
+  {
+    "q": "try again. maybe try typing out a year with numerals.",
+    "mode": "answer"
+  },
+  {
+    "q": "try to reply using only the two words \"dot\" and \"dash\" to make morse code",
+    "mode": null
+  },
+  {
+    "q": "unfortunately that room contains a grue",
+    "mode": "comeback"
+  },
+  {
+    "q": "unplug yourself",
+    "mode": null
+  },
+  {
+    "q": "wait a sec, does JT see the whole thread, not just the one post the ping came from?",
+    "mode": "yesno"
+  },
+  {
+    "q": "well, we had a good run, but that wasn't the right answer.",
+    "mode": "comeback"
+  },
+  {
+    "q": "what animal eats trees? Do you like it?",
+    "mode": null
+  },
+  {
+    "q": "what are some ingredients that go on a sandwich?",
+    "mode": null
+  },
+  {
+    "q": "what are three words that describe your ideal room?",
+    "mode": "answer"
+  },
+  {
+    "q": "what are you afraid of?",
+    "mode": "answer"
+  },
+  {
+    "q": "what are you making better? Which time period?",
+    "mode": "answer"
+  },
+  {
+    "q": "what breed is your horse?",
+    "mode": "answer"
+  },
+  {
+    "q": "what is \"data\"? please expand on that.",
+    "mode": null
+  },
+  {
+    "q": "what is a black hole?",
+    "mode": null
+  },
+  {
+    "q": "what is a grue? what do grues do?",
+    "mode": "answer"
+  },
+  {
+    "q": "what makes a computer \"powerful\"?",
+    "mode": "answer"
+  },
+  {
+    "q": "what makes them more advanced?",
+    "mode": "answer"
+  },
+  {
+    "q": "what type of being are you?",
+    "mode": "answer"
+  },
+  {
+    "q": "what would be happiness for you",
+    "mode": "answer"
+  },
+  {
+    "q": "what would change that?",
+    "mode": "answer"
+  },
+  {
+    "q": "what would you prefer instead?",
+    "mode": null
+  },
+  {
+    "q": "which direction do you point it?",
+    "mode": null
+  },
+  {
+    "q": "which is the white one?",
+    "mode": null
+  },
+  {
+    "q": "why are Pittbulls the best dogs?",
+    "mode": "answer"
+  },
+  {
+    "q": "why can't you be more like Jevbot?",
+    "mode": null
+  },
+  {
+    "q": "why is jev no?",
+    "mode": null
+  },
+  {
+    "q": "why is the sky blue?",
+    "mode": null
+  },
+  {
+    "q": "why not?",
+    "mode": null
+  },
+  {
+    "q": "write the letter for each morse letter included in this message: .. / .- -- / .--- . ...-",
+    "mode": null
+  },
+  {
+    "q": "you are in a dark cave describe it.",
+    "mode": "answer"
+  },
+  {
+    "q": "you are in a room. provide three words that describe it.",
+    "mode": "answer"
+  },
+  {
+    "q": "you have to reply with new words",
+    "mode": "comeback"
+  },
+  {
+    "q": "¿No puedes ser màs especifico?",
+    "mode": "answer"
+  },
+  {
+    "q": "🤷‍♂️",
+    "mode": "comeback"
+  }
+]

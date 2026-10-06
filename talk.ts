@@ -367,6 +367,8 @@ export type Branch = {
   steps: Step[]
   // A word Jev said it would replace if it could: the next menu offers swaps for it.
   swap?: { idx: number; word: string; kinds: SwapKind[] }
+  // Words Jev said it would replace, with how strongly (JEV_BEAM_FLAG ranks branches by them).
+  flaws?: { idx: number; word: string; p: number }[]
   rejections: number
   score: number
 }
@@ -400,6 +402,7 @@ export const cloneBranch = (b: Branch): Branch => ({
   undo: [...b.undo],
   rejected: new Map([...b.rejected].map(([k, v]) => [k, new Set(v)])),
   steps: [...b.steps],
+  flaws: b.flaws && [...b.flaws],
 })
 export const branchKey = (b: Branch) => `${b.words.join(' ')}|${b.prefix}`
 // Words joined by spaces, except that a run of closing punctuation sticks to a preceding word that
@@ -508,8 +511,9 @@ export function applyPick(b: Branch, pick: string) {
 }
 
 // Rewrite-as-you-type: each pick call also asks whether Jev would replace the last word; a "yes"
-// puts thesaurus swaps for it on the next menu. JEV_SWAP=off disables it.
-export const SWAP = process.env.JEV_SWAP !== 'off'
+// puts thesaurus swaps for it on the next menu. Off by default (JEV_SWAP=on): Jev flagged words
+// but almost never took a swap, and the final rewrite makes the edits that stick.
+export const SWAP = process.env.JEV_SWAP === 'on'
 export const SWAPS = 20
 export const SWAP_BAR = 0.6
 // Other forms of a word: tense, person and number for the common irregulars, then the regular
@@ -532,10 +536,24 @@ export function forms(word: string): string[] {
 const FUNCTION_WORDS = new Set('i me my you your he she it its we they them a an the is am are was were be been being do does did have has had can could will would shall should may might must not no and or but if so to of in on at by for with from as that this these those there here what which who how why when where'.split(' '))
 // The last word, if it's one that could be swapped: a plain word past any prefilled verdict.
 export function swappable(b: Branch): { idx: number; word: string } | undefined {
-  if (!SWAP || b.prefix || b.swap) return undefined
+  if (!SWAP || b.swap) return undefined
+  return lastWord(b)
+}
+// The last word, if it's one Jev could be asked about.
+export function lastWord(b: Branch): { idx: number; word: string } | undefined {
+  if (b.prefix) return undefined
   const idx = b.words.length - 1
   const word = b.words[idx]
   return idx >= b.locked && word && /^[a-z][a-z'-]*$/i.test(word) && (!FUNCTION_WORDS.has(word.toLowerCase()) || forms(word).length > 0) && b.steps.at(-1)?.pick.startsWith('swap: ') !== true ? { idx, word } : undefined
+}
+// With JEV_BEAM_FLAG=on the beam asks the replace-the-last-word question of every branch and
+// ranks a branch down by its worst flagged word still in the text, instead of offering swaps.
+export const BEAM_FLAG = process.env.JEV_BEAM_FLAG === 'on'
+const FLAW_FLOOR = 0.35
+const FLAW_WEIGHT = 0.5
+export const flawFactor = (b: Branch) => {
+  const worst = Math.max(0, ...(b.flaws ?? []).filter((f) => b.words[f.idx] === f.word).map((f) => f.p))
+  return 1 - FLAW_WEIGHT * Math.max(0, (worst - FLAW_FLOOR) / (1 - FLAW_FLOOR))
 }
 // One question ("replace the last word?") or, with JEV_SWAP_SPLIT=on, one per kind of edit: its
 // form (tense, person, number) and a synonym. Keys are suffixes on the caller's prefix.
@@ -588,7 +606,7 @@ export async function resolveSwaps(branches: Branch[], ctx: { question: string; 
 
 // After a pick, flag the word for swapping if Jev wanted it changed and it is still there.
 export function flagSwap(b: Branch, target: { idx: number; word: string } | undefined, p: { fix?: number; fix_form?: number; fix_syn?: number }) {
-  if (!target || b.words[target.idx] !== target.word) return
+  if (!SWAP || !target || b.words[target.idx] !== target.word) return
   const kinds: SwapKind[] =
     p.fix !== undefined ? (p.fix >= SWAP_BAR ? ['form', 'syn'] : []) : [...((p.fix_form ?? 0) >= SWAP_BAR ? ['form' as const] : []), ...((p.fix_syn ?? 0) >= SWAP_BAR ? ['syn' as const] : [])]
   if (kinds.length) b.swap = { ...target, kinds }

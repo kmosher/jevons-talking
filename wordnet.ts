@@ -1,6 +1,7 @@
 // A thesaurus from WordNet's own files (the wordnet-db package): a word's synonyms, plus the
 // "similar to" adjectives and the broader terms (hypernyms) of each of its senses.
 import { closeSync, openSync, readFileSync, readSync } from 'node:fs'
+import { gunzipSync } from 'node:zlib'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
@@ -39,20 +40,25 @@ const POS_OF: Record<string, (typeof POS)[number]> = { n: 'noun', v: 'verb', a: 
 // Plain inflections to look up when the word itself isn't a WordNet lemma.
 const lemmas = (w: string) => [w, w.replace(/ies$/, 'y'), w.replace(/es$/, ''), w.replace(/s$/, ''), w.replace(/ed$/, ''), w.replace(/ed$/, 'e'), w.replace(/ing$/, ''), w.replace(/ing$/, 'e')]
 
-// The Moby Thesaurus (public domain, ~30k roots), when JEV_MOBY points at mthesaur.txt. Its
-// lists are long and alphabetical, so mutual synonyms (each lists the other) come first.
-let moby: Map<string, string[]> | undefined
+// The Moby Thesaurus (public domain, ~30k roots, Project Gutenberg #3202), shipped gzipped in
+// data/; JEV_MOBY=off leaves it out, or a path points at another copy. Its lists are long and
+// alphabetical, so mutual synonyms (each lists the other) come first.
+// Entries stay as raw lines (split on lookup): splitting all 2.5M synonyms up front took ~320MB.
+let moby: Map<string, string> | undefined
+const mobyList = (w: string) => moby!.get(w)?.split(',') ?? []
 function mobyFor(w: string): string[] {
-  if (!process.env.JEV_MOBY) return []
+  if (process.env.JEV_MOBY === 'off') return []
   if (!moby) {
     moby = new Map()
-    for (const line of readFileSync(process.env.JEV_MOBY, 'utf8').split(/\r?\n/)) {
-      const [root, ...syns] = line.split(',')
-      if (root) moby.set(root.toLowerCase(), syns.map((x) => x.toLowerCase()))
+    const src = process.env.JEV_MOBY ?? new URL('data/mthesaur.txt.gz', import.meta.url).pathname
+    const raw = readFileSync(src)
+    for (const line of (src.endsWith('.gz') ? gunzipSync(raw) : raw).toString('utf8').toLowerCase().split(/\r?\n/)) {
+      const comma = line.indexOf(',')
+      if (comma > 0) moby.set(line.slice(0, comma), line.slice(comma + 1))
     }
   }
-  const syns = moby.get(w) ?? []
-  const mutual = syns.filter((x) => moby!.get(x)?.includes(w))
+  const syns = mobyList(w)
+  const mutual = syns.filter((x) => moby!.get(x)?.split(',').includes(w))
   return [...mutual, ...syns.filter((x) => !mutual.includes(x))]
 }
 

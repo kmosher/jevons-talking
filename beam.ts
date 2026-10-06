@@ -30,6 +30,9 @@ import {
   flagSwap,
   fixQuestions,
   resolveSwaps,
+  BEAM_FLAG,
+  flawFactor,
+  lastWord,
   type Post,
   type Step,
   recentActions,
@@ -143,7 +146,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
   // A product of probabilities shrinks with every pick, so it favours short drafts; the
   // geometric mean ranks drafts by how confident each pick was, whatever their length.
   const rank = (b: Branch) =>
-    scoring === 'product' || !b.steps.length ? b.score : Math.exp(b.steps.reduce((s, st) => s + Math.log(Math.max(st.confidence, 1e-6)), 0) / b.steps.length)
+    (scoring === 'product' || !b.steps.length ? b.score : Math.exp(b.steps.reduce((s, st) => s + Math.log(Math.max(st.confidence, 1e-6)), 0) / b.steps.length)) * flawFactor(b)
   const byRank = (x: Branch, y: Branch) => rank(y) - rank(x)
   const distinct = (bs: Branch[]) => distinctBy([...bs].sort(byRank), branchText)
   const client = jev()
@@ -188,7 +191,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
     const branchState = Object.fromEntries(
       live.map((b, i) => [ids[i], { ...typingState(b, maxSteps), recent_actions: recentActions(b) }]),
     )
-    const targets = live.map(swappable)
+    const targets = live.map((b) => swappable(b) ?? (BEAM_FLAG ? lastWord(b) : undefined))
     const branchQuestions = Object.fromEntries(
       ids.flatMap((id, i) => [
         [id, choice(`Which menu option do you pick next for branch \`${id}\`?`, menus[i])],
@@ -224,6 +227,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
         else {
           applyPick(child, pick)
           flagSwap(child, targets[i], own)
+          if (BEAM_FLAG && targets[i] && fix !== undefined) child.flaws = [...(child.flaws ?? []), { ...targets[i]!, p: fix }]
           children.push(child)
         }
       }

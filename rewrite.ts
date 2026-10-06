@@ -4,7 +4,7 @@
 import { choice, noul } from '@typesafe-ai/sdk'
 import { rateDrafts } from './beam.ts'
 import { thesaurus } from './wordnet.ts'
-import { fillers, jev, type Mode, type Post, predict } from './talk.ts'
+import { fillers, forms, jev, type Mode, type Post, predict } from './talk.ts'
 
 export const REPLACE = 0.5
 const MAX_REWRITES = 2
@@ -34,7 +34,7 @@ export async function rewrite(question: string, answer: string, opts: { conversa
   for (const t of targets) {
     const prev = t.i > 0 ? next[t.i - 1].toLowerCase().replace(/[^a-z0-9']+$/, '') : '<s>'
     const nextWord = next[t.i + 1]?.toLowerCase().replace(/[^a-z0-9']+$/, '')
-    const pool = [...new Set([...thesaurus(t.word, CANDIDATES), ...fillers(prev, nextWord, CANDIDATES), ...predict(prev, '', 20, 10), ...extraWords])].filter((w) => w !== t.word.toLowerCase())
+    const pool = [...new Set([...forms(t.word), ...thesaurus(t.word, CANDIDATES), ...fillers(prev, nextWord, CANDIDATES), ...predict(prev, '', 20, 10), ...extraWords])].filter((w) => w !== t.word.toLowerCase())
     const options = Object.fromEntries([...(process.env.JEV_REWRITE_KEEP === "on" ? [[KEEP, `keep "${t.word}"`]] : []), [DROP, `delete "${t.word}"`], ...pool.map((w) => [`word: ${w}`, `replace "${t.word}" with "${w}"`])])
     const marked = next.map((w, i) => (i === t.i ? `[${w}]` : w)).join(' ')
     const c = await jev().systemOne({ state: { ...state, your_reply: marked }, questions: { pick: choice(`Which option do you pick for the bracketed word "${t.word}"?`, options) } })
