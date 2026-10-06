@@ -47,6 +47,10 @@ import {
   readScores,
   rubricQuestions,
   type Scores,
+  PRUNE,
+  PRUNE_MAX,
+  STUCK_AFTER,
+  STUCK_CHECK,
 } from './talk.ts'
 
 export type BeamOptions = {
@@ -163,6 +167,19 @@ const STALL_STEPS = 4
 const GOOD_ENOUGH = 0.8
 const DECENT = 0.4
 
+// A draft that ends without SPEAK (a branch Jev says is stuck, or one still live when the search
+// ends) joins the finished drafts with its last 0 to PRUNE_MAX words cut (JEV_PRUNE=on): the judge
+// rates every version in the next call, so trailing salad can be dropped at no extra cost.
+function trims(b: Branch): Branch[] {
+  const cuttable = Math.min(PRUNE_MAX, b.words.length - Math.max(b.locked, 1))
+  return Array.from({ length: Math.max(0, cuttable) + 1 }, (_, k) => {
+    const c = cloneBranch(b)
+    c.words = b.words.slice(0, b.words.length - k)
+    c.prefix = ''
+    return c
+  })
+}
+
 function distinctBy<T>(items: T[], key: (t: T) => string): T[] {
   const seen = new Set<string>()
   return items.filter((t) => {
@@ -231,6 +248,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
       ids.flatMap((id, i) => [
         [id, choice(`Which menu option do you pick next for branch \`${id}\`?`, presented[i].menu)],
         ...(targets[i] ? Object.entries(fixQuestions(targets[i]!.word, `the last word of branch \`${id}\`'s text_so_far`)).map(([k, q]) => [`${id}_${k}`, q]) : []),
+        ...(STUCK_CHECK && live[i].steps.length >= STUCK_AFTER ? [[`${id}_stuck`, noul(`Looking at branch \`${id}\`'s recent_actions and text_so_far, is it stuck going in circles, so it would be better to stop it and send what it has?`)]] : []),
         ...(caseTargets[i] ? [[`${id}_case`, caseQuestion(caseTargets[i]!.word, `the last word of branch \`${id}\`'s text_so_far ("${caseTargets[i]!.word}")`)]] : []),
       ]),
     )
@@ -241,6 +259,13 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
 
     const children: Branch[] = []
     live.forEach((b, i) => {
+      // A stuck branch stops where it is, as a finished draft (with its trims, under JEV_PRUNE).
+      const stuck = fixes[`${ids[i]}_stuck`]?.noul
+      if (stuck !== undefined && stuck >= 0.5 && b.words.length > b.locked) {
+        log(`   branch ${ids[i]} stuck (${(stuck * 100).toFixed(0)}%): "${branchText(b)}"`)
+        finished.push(...(PRUNE ? trims(b) : [b]))
+        return
+      }
       const a = answers[ids[i]]
       const ranked = Object.entries(a.probabilities).sort((x, y) => y[1] - x[1])
       // Always follow Jev's pick; split on other options that clear the bar, except mid-word:
@@ -294,6 +319,8 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
     if (top.length >= width && (live.every((b) => rank(b) < rank(top.at(-1)!)) || (stale >= STALL_STEPS && bestRated() >= DECENT))) break
   }
 
+  // Out of steps: live branches join the finished drafts, trimmed, if nothing good was found.
+  if (PRUNE && !dryRun && bestRated() < good) for (const b of live) if (b.words.length > b.locked) finished.push(...trims(b))
   // Rate whatever finished since the last call, then take the best-rated draft.
   if (!dryRun && unrated().length && bestRated() < good) await ask({}, null, unrated())
   const drafts = distinct(finished)

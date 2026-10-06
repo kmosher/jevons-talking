@@ -735,13 +735,13 @@ const MAX_GATE_CHECKS = 3
 // JEV_STUCK=on asks, in each pick call from STUCK_AFTER picks on, whether Jev is stuck going in
 // circles. A yes ends the draft where it stands (pruned, with JEV_PRUNE=on), and lets a short
 // fragment through the SPEAK gate.
-const STUCK_CHECK = process.env.JEV_STUCK === 'on'
-const STUCK_AFTER = 8
+export const STUCK_CHECK = process.env.JEV_STUCK === 'on'
+export const STUCK_AFTER = 8
 // JEV_PRUNE=on: a draft that ends without SPEAK (stuck, or out of picks) is offered back with its
 // last 0 to PRUNE_MAX words cut, and Jev picks which to send, so a run that trails off into word
 // salad can fall back to where it still made sense. One call.
-const PRUNE = process.env.JEV_PRUNE === 'on'
-const PRUNE_MAX = 5
+export const PRUNE = process.env.JEV_PRUNE === 'on'
+export const PRUNE_MAX = 5
 async function prune(b: Branch, question: string, conversation: Post[] | undefined, log: (l: string) => void): Promise<number> {
   const cuttable = b.words.length - Math.max(b.locked, 1)
   const versions = Array.from({ length: Math.min(PRUNE_MAX, cuttable) + 1 }, (_, k) => b.words.slice(0, b.words.length - k))
