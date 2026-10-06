@@ -921,12 +921,13 @@ export async function usefulWords(question: string, conversation: Post[] | undef
 export const UNSURE = 0.1
 // "maybe" is for a real toss-up; "idk" is for a question Jev says it doesn't know the answer to,
 // which a probability near 50% alone can't tell apart.
-// Unknowables (rain on a date in 2031, life on other planets) score 4-9% on "know"; questions Jev
-// has a view on but hedges, like "are you like a horse?", land around 30-35%.
-export const IDK = 0.2
+// Asked whether the question is the kind it would know, unknowables (rain on a date in 2031, life
+// on other planets) score 10-20% and questions Jev has a view on, even hedged ones like "are you
+// like a horse?", 40% and up. "Do you actually know…?" pulled the hedged ones down among the unknowables.
+export const IDK = 0.3
 const VERDICT_QUESTIONS = {
   yes: noul('Is the answer to the yes-or-no question in the message yes?'),
-  know: noul('Do you actually know the answer to the yes-or-no question in the message?'),
+  know: noul('Is the yes-or-no question in the message the kind of question you would know the answer to?'),
 }
 function readVerdict(answers: Record<string, unknown>): { yes: number; know: number; word: string } {
   const yes = (answers.yes as { noul: number }).noul
