@@ -240,12 +240,12 @@ const MOD_LAYOUT = process.env.JEV_MOD_LAYOUT ?? 'footer'
 // Adds the footer and wraps the parts in an SVG sized to fit; with MOD_LAYOUT footer, the
 // self-moderation dots sit at its left.
 function finish(parts: string[], y: number, scores?: Record<string, number>): string {
-  // The bottom strip: the label shares a line with the credit, and the dots get a row below.
+  // The bottom strip: the label on its own line, then the dots, with the credit at their right.
   if (scores && MOD_LAYOUT !== 'row') {
     parts.push(`<text x="${PAD}" y="${y}" font-family="${SANS}" font-size="11" font-weight="700" fill="${C.muted}" letter-spacing="1">SELF-MODERATED</text>`)
     modDots(parts, PAD, y + 20, scores, { r: 5, step: 13, size: 12, gap: 22, numbers: MOD_LAYOUT === 'footer-numbers' })
   }
-  parts.push(`<text x="${W - PAD}" y="${y}" font-family="${SANS}" font-size="12" fill="${C.muted}" text-anchor="end">@jevons-talking.bsky.social · github.com/kmosher/jevons-talking</text>`)
+  parts.push(`<text x="${W - PAD}" y="${scores && MOD_LAYOUT !== 'row' ? y + 24 : y}" font-family="${SANS}" font-size="12" fill="${C.muted}" text-anchor="end">@jevons-talking.bsky.social · github.com/kmosher/jevons-talking</text>`)
   const H = y + PAD - 12 + (scores && MOD_LAYOUT !== 'row' ? 22 : 0)
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><rect width="${W}" height="${H}" fill="${C.bg}"/>${parts.join('')}</svg>`
 }
