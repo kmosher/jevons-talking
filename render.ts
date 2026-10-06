@@ -146,25 +146,12 @@ export function renderSvg(t: Talk, { full = false } = {}): string {
       }
     y += 6
   }
-  // Slashdot-style self-moderation: each rubric as five dots, filled to its 0-5 score.
+  // Slashdot-style self-moderation: each rubric as five dots, filled to its 0-5 score. A row
+  // under the decisions line, or (MOD_LAYOUT footer) along the bottom next to the credit line.
   const scores = (t as Partial<HybridTalk>).scores
-  if (scores) {
+  if (scores && MOD_LAYOUT === 'row') {
     parts.push(`<text x="${PAD}" y="${y + 4}" font-family="${SANS}" font-size="12" font-weight="700" fill="${C.muted}" letter-spacing="1">SELF-MODERATED</text>`)
-    let x = PAD + 132
-    for (const [name, value] of Object.entries(scores)) {
-      const label = `${name[0].toUpperCase()}${name.slice(1)}`
-      parts.push(`<text x="${x + 5 * 17 + 4}" y="${y + 5}" font-family="${SANS}" font-size="14" fill="${C.ink}">${esc(label)}</text>`)
-      for (let i = 0; i < 5; i++) {
-        const cx = x + 7 + i * 17
-        const fill = Math.max(0, Math.min(1, value - i))
-        const id = `mod-${name}-${i}`
-        parts.push(`<clipPath id="${id}"><circle cx="${cx}" cy="${y}" r="6.5"/></clipPath>`)
-        parts.push(`<circle cx="${cx}" cy="${y}" r="6.5" fill="${C.chip}"/>`)
-        if (fill > 0) parts.push(`<rect x="${cx - 6.5}" y="${y - 6.5}" width="${13 * fill}" height="13" fill="${C.orange}" clip-path="url(#${id})"/>`)
-        parts.push(`<circle cx="${cx}" cy="${y}" r="6.5" fill="none" stroke="${C.ink}" stroke-opacity="0.35" stroke-width="1"/>`)
-      }
-      x += 5 * 17 + 4 + 112
-    }
+    modDots(parts, PAD + 132, y, scores, { r: 6.5, step: 17, size: 14, gap: 28 })
     y += 32
   }
   // When there was more than one candidate: each, and how Jev rated it as a final answer.
@@ -207,7 +194,7 @@ export function renderSvg(t: Talk, { full = false } = {}): string {
   }
   parts.push(...strip)
   y += LINE_H + 22
-  if (!full) return finish(parts, y)
+  if (!full) return finish(parts, y, scores)
 
   parts.push(`<text x="${PAD + 36}" y="${y}" font-family="${SANS}" font-size="12" font-weight="700" fill="${C.muted}" letter-spacing="1">PICKED</text>`)
   parts.push(`<text x="${PAD + 236}" y="${y}" font-family="${SANS}" font-size="12" font-weight="700" fill="${C.muted}" letter-spacing="1">PASSED OVER</text>`)
@@ -222,13 +209,44 @@ export function renderSvg(t: Talk, { full = false } = {}): string {
       y += ROW
     }
   }
-  return finish(parts, y + 16)
+  return finish(parts, y + 16, scores)
 }
 
-// Adds the footer and wraps the parts in an SVG sized to fit.
-function finish(parts: string[], y: number): string {
+// A closer width estimate for short labels than textWidth: narrow and wide letters differ a lot.
+const labelWidth = (s: string, size: number) =>
+  [...s].reduce((w, ch) => w + (/[iljtfr.' ]/.test(ch) ? 0.3 : /[mwMW]/.test(ch) ? 0.85 : /[A-Z]/.test(ch) ? 0.68 : 0.54), 0) * size
+// Five dots per rubric, the last partly filled; returns the x after the last rubric.
+function modDots(parts: string[], x: number, y: number, scores: Record<string, number>, o: { r: number; step: number; size: number; gap: number; numbers?: boolean }): number {
+  for (const [name, value] of Object.entries(scores)) {
+    const label = `${name[0].toUpperCase()}${name.slice(1)}`
+    for (let i = 0; i < 5; i++) {
+      const cx = x + o.r + i * o.step
+      const fill = Math.max(0, Math.min(1, value - i))
+      const id = `mod-${name}-${i}`
+      parts.push(`<clipPath id="${id}"><circle cx="${cx}" cy="${y}" r="${o.r}"/></clipPath>`)
+      parts.push(`<circle cx="${cx}" cy="${y}" r="${o.r}" fill="${C.chip}"/>`)
+      if (fill > 0) parts.push(`<rect x="${cx - o.r}" y="${y - o.r}" width="${2 * o.r * fill}" height="${2 * o.r}" fill="${C.orange}" clip-path="url(#${id})"/>`)
+      parts.push(`<circle cx="${cx}" cy="${y}" r="${o.r}" fill="none" stroke="${C.ink}" stroke-opacity="0.35" stroke-width="1"/>`)
+    }
+    x += 4 * o.step + 2 * o.r + 6
+    const text = o.numbers ? `${label} ${value.toFixed(1)}` : label
+    parts.push(`<text x="${x}" y="${y + o.size * 0.36}" font-family="${SANS}" font-size="${o.size}" fill="${C.ink}">${esc(text)}</text>`)
+    x += labelWidth(text, o.size) + o.gap
+  }
+  return x
+}
+const MOD_LAYOUT = process.env.JEV_MOD_LAYOUT ?? 'footer'
+
+// Adds the footer and wraps the parts in an SVG sized to fit; with MOD_LAYOUT footer, the
+// self-moderation dots sit at its left.
+function finish(parts: string[], y: number, scores?: Record<string, number>): string {
+  // The bottom strip: the label shares a line with the credit, and the dots get a row below.
+  if (scores && MOD_LAYOUT !== 'row') {
+    parts.push(`<text x="${PAD}" y="${y}" font-family="${SANS}" font-size="11" font-weight="700" fill="${C.muted}" letter-spacing="1">SELF-MODERATED</text>`)
+    modDots(parts, PAD, y + 20, scores, { r: 5, step: 13, size: 12, gap: 22, numbers: MOD_LAYOUT === 'footer-numbers' })
+  }
   parts.push(`<text x="${W - PAD}" y="${y}" font-family="${SANS}" font-size="12" fill="${C.muted}" text-anchor="end">@jevons-talking.bsky.social · github.com/kmosher/jevons-talking</text>`)
-  const H = y + PAD - 12
+  const H = y + PAD - 12 + (scores && MOD_LAYOUT !== 'row' ? 22 : 0)
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><rect width="${W}" height="${H}" fill="${C.bg}"/>${parts.join('')}</svg>`
 }
 
