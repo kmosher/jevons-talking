@@ -228,11 +228,12 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
         const fix = Object.values(own).length ? Math.max(...(Object.values(own) as number[])) : undefined
         child.steps.push({ menu: Object.keys(menus[i]), pick, confidence: p, probabilities: a.probabilities, ...(fix !== undefined ? { fix } : {}) })
         child.score *= p
+        // Casing answers about the word before this pick, so it applies whether or not the pick ends the draft.
+        if (!isSpeak(pick)) applyPick(child, pick)
+        const cased = applyCase(child, caseTargets[i], (raw as Record<string, { choice: string }>)[`${ids[i]}_case`])
+        if (cased) child.steps.at(-1)!.cased = cased
         if (isSpeak(pick)) finished.push(child)
         else {
-          applyPick(child, pick)
-          const cased = applyCase(child, caseTargets[i], (raw as Record<string, { choice: string }>)[`${ids[i]}_case`])
-          if (cased) child.steps.at(-1)!.cased = cased
           flagSwap(child, targets[i], own)
           if (BEAM_FLAG && targets[i] && fix !== undefined) child.flaws = [...(child.flaws ?? []), { ...targets[i]!, p: fix }]
           children.push(child)

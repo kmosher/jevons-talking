@@ -688,7 +688,13 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
     b.steps.push({ menu: Object.keys(menu), pick: a.choice, confidence: a.confidence, probabilities: a.probabilities, ...(fix !== undefined ? { fix } : {}) })
     log(`${String(step + 1).padStart(2)} ${a.choice.padEnd(16)} conf=${a.confidence.toFixed(2)}  | ${branchText(b)}${b.prefix ? ' ' + b.prefix + '…' : ''}`)
 
+    // The last word's casing is answered in the same call as SPEAK, so apply it before stopping.
     if (isSpeak(a.choice)) {
+      const casedLast = applyCase(b, caseT, (r.answers as Record<string, unknown>).case as { choice: string } | undefined)
+      if (casedLast) {
+        b.steps.at(-1)!.cased = casedLast
+        log(`   cased "${caseT!.word}" ${casedLast}`)
+      }
       if (!confirmSpeak || b.rejections >= maxRejections) break
       // A second opinion on stopping: a "no" withdraws SPEAK from this point and Jev carries on.
       const c = await client.systemOne({ state, questions: { final: noul('Is the text so far your final answer?') } })
