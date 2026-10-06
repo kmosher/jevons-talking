@@ -278,6 +278,29 @@ async function missedReplies(): Promise<Incoming[]> {
     }
   }
   if (out.length) log(`sweep found ${out.length} reply(s) with no notification`)
+  return [...out, ...(await creditsRetries())]
+}
+
+// A message JT couldn't answer for want of Jev credits is tried again once the notice is
+// CREDITS_RETRY_AFTER old: the notice is deleted and the message answered as if new (if credits
+// are still out, a fresh notice replaces the old one).
+const CREDITS_RETRY_AFTER = 30 * 60_000
+async function creditsRetries(): Promise<Incoming[]> {
+  const me = agent.session!.did
+  const { data } = await agent.getAuthorFeed({ actor: me, limit: 100, filter: 'posts_with_replies' })
+  const out: Incoming[] = []
+  for (const item of data.feed) {
+    const record = item.post.record as { text?: string; reply?: { parent: Ref } }
+    const age = Date.now() - Date.parse(item.post.indexedAt)
+    if (item.post.author.did !== me || record.text !== CREDITS_REPLY || !record.reply || age < CREDITS_RETRY_AFTER || age > 7 * 86_400_000) continue
+    const [p] = (await agent.getPosts({ uris: [record.reply.parent.uri] })).data.posts
+    await agent.deletePost(item.post.uri)
+    if (!p) continue
+    handled.delete(p.uri)
+    failures.delete(p.uri)
+    out.push({ uri: p.uri, cid: p.cid, author: p.author, record: p.record, indexedAt: p.indexedAt })
+  }
+  if (out.length) log(`retrying ${out.length} message(s) that hit out-of-credits`)
   return out
 }
 
