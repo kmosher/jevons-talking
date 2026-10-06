@@ -82,7 +82,9 @@ function senses(lemma: string): { pos: (typeof POS)[number]; offsets: number[] }
     const line = indexes[pos].find(lemma)
     if (!line) return []
     const f = line.trim().split(' ')
-    return [{ pos, offsets: f.slice(-Number(f[2])).map(Number) }]
+    // A header or malformed line ("87F" strips to "f", which can land on the license text) has no offsets.
+    const offsets = f.slice(-Number(f[2])).map(Number).filter(Number.isInteger)
+    return offsets.length ? [{ pos, offsets }] : []
   })
 }
 
@@ -129,7 +131,10 @@ function mobyFor(w: string): string[] {
 
 // Single-word alternatives for `word`, synonyms first; at most `n`.
 export function thesaurus(word: string, n = 40): string[] {
+  // Numbers and codes ("87F") have no synonyms; stripping their digits found "f" = fluorine.
+  if (/\d/.test(word)) return []
   const w = word.toLowerCase().replace(/[^a-z'-]/g, '')
+  if (!w) return []
   const entries = lemmas(w).flatMap(senses)
   const near: string[] = []
   const broader: string[] = []
