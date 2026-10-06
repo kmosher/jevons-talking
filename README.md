@@ -1,5 +1,7 @@
 # jevons-talking
 
+![How JT talks: context gathering, Jev sorting the thread and choosing a reply type, writing one key at a time on a predictive keyboard, a fresh Jev judging, beam search for weak drafts, a thesaurus rewrite, then posting with a trace image](docs/how-jt-talks.png)
+
 [Jev](https://typesafe.ai) is a decision model: it can't write text, only pick from options.
 This gives it a voice anyway, borrowing the idea from the word-prediction keyboards used in
 assistive communication. Each turn, Jev sees a menu of
