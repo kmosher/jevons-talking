@@ -27,7 +27,10 @@ import { chunkOf, dasherMenu } from './dasher.ts'
 
 export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number; fix?: number }
 export type Talk = { question: string; answer: string; finished: boolean; steps: Step[] }
-export type Post = { author: string; text: string }
+// A context entry. Images (descriptions plus alt text) and JT's rejected drafts ride in their
+// own fields, not inside the text, so Jev can tell what was said from what was seen or tried.
+export type Role = 'thread' | 'you' | 'linked' | 'asker' | 'gap'
+export type Post = { author: string; role?: Role; text: string; images?: string[]; rejected_drafts?: string[] }
 type Options = { keyboard?: Keyboard; mode?: Mode; phrases?: number; conversation?: Post[]; extraInstructions?: string; prefill?: string[]; extraWords?: string[]; minWordsToSpeak?: number; confirmSpeak?: boolean; maxRejections?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
 
 // --- Blocklist ---------------------------------------------------------------
@@ -216,8 +219,10 @@ menu option. Options are:
   spoken aloud as your final answer).
 recent_actions lists your last few picks. Options you already backspaced over from the current text
 are not offered again: if you're stuck, backspace further and rephrase.
-If conversation_so_far is present, the question is the latest message in that conversation; posts
-by "you" are your own earlier replies, and "@you" in a message means it is addressed to you.`
+If conversation_so_far is present, the question is the latest message in that conversation (role
+"asker"). Role "you" marks your own earlier replies, with any drafts you passed over in rejected_drafts;
+role "linked" marks posts that were linked or quoted; "images" holds descriptions of a post's images.
+"@you" in a message means it is addressed to you.`
 
 // What kind of reply a message calls for, chosen by Jev before it writes anything. Each mode
 // sets the last line of the instructions and the wording the judges rate drafts against.
@@ -295,27 +300,40 @@ export async function classify(
 // posts up) don't leak into its word choices. Always kept: the latest message, the post it replies
 // to, Jev's own latest reply, linked posts, and gap markers. One call; a short thread is untouched.
 export const RELEVANT = 0.5
-export async function relevantContext(conversation: Post[]): Promise<{ kept: Post[]; dropped: Post[] }> {
+export async function relevantContext(conversation: Post[]): Promise<{ kept: Post[]; dropped: Post[]; trimmed: string[] }> {
   const last = conversation.length - 1
   const threadIdx = conversation.map((p, i) => i).filter((i) => i < last && !p_isLinked(conversation[i]))
   const parent = threadIdx.at(-1)
   const lastOwn = [...threadIdx].reverse().find((i) => conversation[i].author === 'you')
   const always = new Set([last, parent, lastOwn].filter((i): i is number => i !== undefined))
   const scored = threadIdx.filter((i) => !always.has(i) && conversation[i].author !== '…')
-  if (!scored.length) return { kept: conversation, dropped: [] }
+  // Each post's extras are rated on their own: most replies don't need the drafts JT passed over.
+  const withDrafts = conversation.map((p, i) => i).filter((i) => conversation[i].rejected_drafts?.length)
+  if (!scored.length && !withDrafts.length) return { kept: conversation, dropped: [], trimmed: [] }
   const r = await jev().systemOne({
     state: {
       latest_message: conversation[last],
-      earlier_posts: Object.fromEntries(scored.map((i) => [`p${i}`, conversation[i]])),
+      earlier_posts: Object.fromEntries([...new Set([...scored, ...withDrafts])].sort((a, b) => a - b).map((i) => [`p${i}`, conversation[i]])),
     },
-    questions: Object.fromEntries(
-      scored.map((i) => [`p${i}`, noul(`Is earlier post \`p${i}\` relevant to understanding or replying to the latest message?`)]),
-    ),
+    questions: Object.fromEntries([
+      ...scored.map((i) => [`p${i}`, noul(`Is earlier post \`p${i}\` relevant to understanding or replying to the latest message?`)]),
+      ...withDrafts.map((i) => [`d${i}`, noul(`Would the rejected_drafts of post \`p${i}\` (drafts you passed over) help you reply to the latest message?`)]),
+    ]),
   })
-  const keep = (i: number) => always.has(i) || !scored.includes(i) || (r.answers[`p${i}`] as { noul: number }).noul >= RELEVANT
-  return { kept: conversation.filter((_, i) => keep(i)), dropped: conversation.filter((_, i) => !keep(i)) }
+  const v = (k: string) => (r.answers[k] as { noul: number }).noul
+  const keep = (i: number) => always.has(i) || !scored.includes(i) || v(`p${i}`) >= RELEVANT
+  const trimmed: string[] = []
+  const kept = conversation
+    .map((p, i) => {
+      if (!withDrafts.includes(i) || v(`d${i}`) >= RELEVANT) return p
+      trimmed.push(`drafts of "${p.text.slice(0, 30)}"`)
+      const { rejected_drafts: _, ...rest } = p
+      return rest
+    })
+    .filter((_, i) => keep(i))
+  return { kept, dropped: conversation.filter((_, i) => !keep(i)), trimmed }
 }
-const p_isLinked = (p: Post) => p.author.endsWith('(linked post)')
+const p_isLinked = (p: Post) => p.role === 'linked' || p.author.endsWith('(linked post)')
 
 const HISTORY = 10
 let client: TypeSafeClient | undefined
@@ -406,7 +424,10 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   const menu: Record<string, string> = {}
   const keyboard = o.keyboard ?? DEFAULT_KEYBOARD
   const predicted = predict(prev, prefix, o.words, o.common, keyboard)
-  for (const w of predicted) menu[`word: ${w}`] = `append "${w}"`
+  // Each word shows the text it would make, so Jev judges the result before
+  // picking rather than after (most deletes undid the word picked the step before). JEV_PREVIEW=off restores "append X".
+  const before = PREVIEW ? branchText(b) : ''
+  for (const w of predicted) menu[`word: ${w}`] = PREVIEW ? `→ "${before ? `${before} ` : ''}${w}"` : `append "${w}"`
   // Two-word phrases: a predicted word with its most likely follower, when that pairing is strong.
   if (o.phrases) {
     let added = 0
@@ -422,7 +443,10 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   // Any letter or digit, like a real keyboard, so Jev can spell words the predictor doesn't know.
   const letters = 'abcdefghijklmnopqrstuvwxyz0123456789'
   // Replacements for a word Jev just flagged, from the thesaurus (rewrite-as-you-type).
-  if (b.swap && !prefix) for (const w of thesaurus(b.swap.word, SWAPS)) menu[`swap: ${w}`] ??= `replace "${b.swap.word}" with "${w}"`
+  if (b.swap && !prefix) {
+    const fn = FUNCTION_WORDS.has(b.swap.word.toLowerCase())
+    for (const w of [...forms(b.swap.word), ...(fn ? [] : thesaurus(b.swap.word, SWAPS))].slice(0, SWAPS)) menu[`swap: ${w}`] ??= `replace "${b.swap.word}" with "${w}"`
+  }
   // Words from the conversation the predictor doesn't know (names, jargon), offered once they match.
   for (const w of o.extra ?? []) if (w.startsWith(prefix)) menu[`word: ${w}`] ??= `append "${w}" (from the conversation)`
   // A lone letter is only a word if it's "a", "i" or a digit; otherwise committing it leaves a
@@ -491,19 +515,51 @@ export function applyPick(b: Branch, pick: string) {
 export const SWAP = process.env.JEV_SWAP !== 'off'
 export const SWAPS = 20
 export const SWAP_BAR = 0.6
-// Function words ("i", "is", "can") get flagged at about the base rate and have no useful synonyms.
+// Other forms of a word: tense, person and number for the common irregulars, then the regular
+// -s/-ed/-ing endings. Swaps offer these alongside synonyms, so "i is" can become "i am".
+const FORM_SETS = [
+  'be am is are was were been being', 'have has had having', 'do does did done doing', 'go goes went gone going',
+  'i me my mine myself', 'we us our ours', 'he him his', 'she her hers', 'they them their theirs', 'it its',
+  'can could', 'will would', 'shall should', 'may might', 'this these', 'that those', 'a an the',
+  "isn't aren't wasn't weren't", "don't doesn't didn't", "can't couldn't", "won't wouldn't",
+].map((g) => g.split(' '))
+export function forms(word: string): string[] {
+  const w = word.toLowerCase()
+  const set = FORM_SETS.find((g) => g.includes(w))
+  if (set) return set.filter((x) => x !== w)
+  const stem = w.replace(/(ing|ed|es|s)$/, '')
+  return [stem, `${stem}s`, `${stem}ed`, `${stem}ing`].filter((x) => x !== w && unigram.has(x))
+}
+// Function words ("i", "is", "can") get flagged at about the base rate; they're only swappable
+// when they have other forms, and then only those are offered.
 const FUNCTION_WORDS = new Set('i me my you your he she it its we they them a an the is am are was were be been being do does did have has had can could will would shall should may might must not no and or but if so to of in on at by for with from as that this these those there here what which who how why when where'.split(' '))
 // The last word, if it's one that could be swapped: a plain word past any prefilled verdict.
 export function swappable(b: Branch): { idx: number; word: string } | undefined {
   if (!SWAP || b.prefix || b.swap) return undefined
   const idx = b.words.length - 1
   const word = b.words[idx]
-  return idx >= b.locked && word && /^[a-z][a-z'-]*$/i.test(word) && !FUNCTION_WORDS.has(word.toLowerCase()) && b.steps.at(-1)?.pick.startsWith('swap: ') !== true ? { idx, word } : undefined
+  return idx >= b.locked && word && /^[a-z][a-z'-]*$/i.test(word) && (!FUNCTION_WORDS.has(word.toLowerCase()) || forms(word).length > 0) && b.steps.at(-1)?.pick.startsWith('swap: ') !== true ? { idx, word } : undefined
 }
 export const fixQuestion = (word: string) => noul(`Would you replace the last word of text_so_far ("${word}") with a better word, if you could?`)
 // After a pick, flag the word for swapping if Jev wanted it replaced and it is still there.
 export function flagSwap(b: Branch, target: { idx: number; word: string } | undefined, p: number | undefined) {
   if (target && p !== undefined && p >= SWAP_BAR && b.words[target.idx] === target.word) b.swap = target
+}
+
+// What Jev sees of a draft each step. With JEV_STATE=v2: the typed letters inline at a cursor,
+// how many picks it has used, and the words it already tried and deleted at this point (they're
+// off the menu), aimed at the pick-a-word-then-delete-it churn.
+const STATE_V2 = process.env.JEV_STATE === 'v2'
+const PREVIEW = process.env.JEV_PREVIEW !== 'off'
+export function typingState(b: Branch, maxSteps: number): Record<string, string | string[]> {
+  const text = branchText(b)
+  if (!STATE_V2) return { text_so_far: text || '(nothing yet)', letters_typed: b.prefix || '(none)' }
+  const tried = [...(b.rejected.get(branchKey(b)) ?? [])].filter((o) => o.startsWith('word: ')).map((o) => o.slice(6))
+  return {
+    text_so_far: `${text}${text && b.prefix ? ' ' : ''}${b.prefix}▮`,
+    picks_used: `${b.steps.length} of at most ${maxSteps}; most good replies take 5 to 20`,
+    ...(tried.length ? { already_tried_and_deleted_here: tried } : {}),
+  }
 }
 
 export const recentActions = (b: Branch) => {
@@ -518,7 +574,7 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
 
   for (let step = 0; step < maxSteps; step++) {
     const menu = menuFor(b, { words: nWords, common, minWordsToSpeak: minWordsToSpeak + prefill.length, phrases, keyboard, extra: extraWords })
-    const state = { instructions: extraInstructions ? `${instructionsFor(mode, keyboard)}\n${extraInstructions}` : instructionsFor(mode, keyboard), ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recentActions(b), text_so_far: branchText(b) || '(nothing yet)', letters_typed: b.prefix || '(none)' }
+    const state = { instructions: extraInstructions ? `${instructionsFor(mode, keyboard)}\n${extraInstructions}` : instructionsFor(mode, keyboard), ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recentActions(b), ...typingState(b, maxSteps) }
     const target = swappable(b)
     const questions = { next: choice('Which menu option do you pick next?', menu), ...(target ? { fix: fixQuestion(target.word) } : {}) }
     if (dryRun) {

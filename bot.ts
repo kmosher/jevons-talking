@@ -20,7 +20,7 @@ import type { BeamTalk } from './beam.ts'
 import { describeImage, loadCaptioner } from './caption.ts'
 import { type HybridTalk, hybrid } from './hybrid.ts'
 import { altText, pickLabel, rejectedDrafts, renderPng } from './render.ts'
-import { containsBlocked, isSpace, isSpeak, meanConfidence, type Post, save, type Step, type Talk } from './talk.ts'
+import { containsBlocked, isSpace, isSpeak, meanConfidence, type Post, type Role, save, type Step, type Talk } from './talk.ts'
 
 const HANDLE = process.env.BLUESKY_HANDLE ?? 'jevons-talking.bsky.social'
 const PASSWORD = process.env.BLUESKY_APP_PASSWORD
@@ -154,8 +154,8 @@ async function describe(url: string): Promise<string | null> {
   return caption
 }
 type ImageView = { fullsize?: string; alt?: string }
-async function imageNotes(p: AppBskyFeedDefs.PostView): Promise<string> {
-  if (p.author.did === agent.session?.did) return ''
+async function imageNotes(p: AppBskyFeedDefs.PostView): Promise<string[]> {
+  if (p.author.did === agent.session?.did) return []
   const embed = p.embed as { images?: ImageView[]; media?: { images?: ImageView[] } } | undefined
   const images = [...(embed?.images ?? []), ...(embed?.media?.images ?? [])].slice(0, 4)
   const notes = await Promise.all(
@@ -165,17 +165,18 @@ async function imageNotes(p: AppBskyFeedDefs.PostView): Promise<string> {
       return [caption, alt && `alt text: ${alt}`].filter(Boolean).join(' / ') || null
     }),
   )
-  return notes.filter(Boolean).map((n) => `\n[image: ${n}]`).join('')
+  return notes.filter((n): n is string => Boolean(n))
 }
 // A post as a context entry: the bot's own posts as "you", without stats or trace images.
-async function asContext(p: AppBskyFeedDefs.PostView, suffix = ''): Promise<Post> {
+async function asContext(p: AppBskyFeedDefs.PostView, role: Role = 'thread'): Promise<Post> {
   const text = (p.record as { text?: string }).text ?? ''
   if (p.author.did === agent.session?.did) {
     // Jev also sees the drafts it passed over, as readers of the trace image can.
     const passed = rejectedDrafts((p.embed as { images?: ImageView[] } | undefined)?.images?.[0]?.alt)
-    return { author: `you${suffix}`, text: ownText(text) + (passed.length ? ` [drafts you rejected: ${passed.map((d) => `"${d}"`).join(', ')}]` : '') }
+    return { author: 'you', role: role === 'thread' ? 'you' : role, text: ownText(text), ...(passed.length ? { rejected_drafts: passed } : {}) }
   }
-  return { author: `@${p.author.handle}${suffix}`, text: addressed(text) + (await imageNotes(p)) }
+  const images = await imageNotes(p)
+  return { author: `@${p.author.handle}`, role, text: addressed(text), ...(images.length ? { images } : {}) }
 }
 
 // Posts a message points at, by quote embed or by a bsky.app link, as context entries: Jev
@@ -199,7 +200,7 @@ async function linkedPosts(msg: Linking): Promise<Post[]> {
     }
   if (!uris.size) return []
   const { data } = await agent.getPosts({ uris: [...uris].slice(0, 5) })
-  return Promise.all(data.posts.map((p) => asContext(p, ' (linked post)')))
+  return Promise.all(data.posts.map((p) => asContext(p, 'linked')))
 }
 // The question with bare links removed; a message that was only a link asks about the linked post.
 const withoutLinks = (text: string) => text.replace(/\S*bsky\.app\/profile\/\S+/g, '').trim()
@@ -252,7 +253,7 @@ async function threadContext(uri: string): Promise<Post[]> {
     chars += rest[i].text.length
   }
   const gap = Boolean(root) || kept.length < rest.length
-  return [...(rootPost ? [rootPost] : []), ...(gap ? [{ author: '…', text: '(earlier posts omitted)' }] : []), ...kept]
+  return [...(rootPost ? [rootPost] : []), ...(gap ? [{ author: '…', role: 'gap' as const, text: '(earlier posts omitted)' }] : []), ...kept]
 }
 
 // Bluesky occasionally creates no notification for a reply, so every SWEEP_EVERY polls (~2.5 min) the bot
@@ -296,7 +297,7 @@ async function replyTo(n: Incoming, record: { reply?: { root: Ref; parent: Ref }
     const thread = record.reply ? await threadContext(n.uri) : []
     // The question itself goes last, labelled with who asked it and with its images described.
     const [view] = (await agent.getPosts({ uris: [n.uri] })).data.posts
-    const asker = view ? await asContext(view) : { author: `@${n.author.handle}`, text: question }
+    const asker: Post = view ? await asContext(view, 'asker') : { author: `@${n.author.handle}`, role: 'asker', text: question }
     const t = await answer(question, [...thread, ...linked, asker])
     const image = containsBlocked(t.answer) ? undefined : await traceImage(t, full)
     const last = await post(headline(t, !image), root, parent, image)
@@ -389,7 +390,7 @@ async function pollDms() {
       const linked = await linkedPosts(msg)
       const asked = withoutLinks(msg.text) || 'What do you make of the linked post?'
       const handle = convo.members.find((m) => m.did === msg.sender.did)?.handle ?? 'someone'
-      const t = await answer(asked, [...linked, { author: `@${handle}`, text: msg.text }])
+      const t = await answer(asked, [...linked, { author: `@${handle}`, role: 'asker', text: msg.text }])
       await send(headline(t))
       for (const chunk of traceChunks(t, DM_LIMIT)) await send(chunk)
     }

@@ -48,11 +48,12 @@ async function compose(question: string, opts: HybridOptions = {}): Promise<Hybr
   let conversation = opts.conversation
   let filterCalls = 0
   let droppedPosts: Post[] = []
-  if (conversation && conversation.length > 3 && process.env.JEV_RELEVANCE !== 'off') {
-    const { kept, dropped } = await relevantContext(conversation)
+  if (conversation && (conversation.length > 3 || conversation.some((p) => p.rejected_drafts?.length)) && process.env.JEV_RELEVANCE !== 'off') {
+    const { kept, dropped, trimmed } = await relevantContext(conversation)
     filterCalls = 1
     droppedPosts = dropped
     conversation = kept
+    if (trimmed.length) log(`trimmed: ${trimmed.join(', ')}`)
     if (dropped.length) log(`dropped context: ${dropped.map((p) => `${p.author}: "${p.text.slice(0, 50)}"`).join(' | ')}`)
   }
   // First, what kind of reply the message calls for and which keyboard to write it with: by
@@ -116,7 +117,7 @@ async function compose(question: string, opts: HybridOptions = {}): Promise<Hybr
     contextTotal: Math.max(0, (opts.conversation?.length ?? 1) - 1),
     contextKept: Math.max(0, (conversation?.length ?? 1) - 1),
     dropped: droppedPosts,
-    images: (conversation ?? []).flatMap((p) => [...p.text.matchAll(/\[image: ([^\]]+)\]/g)].map((m) => m[1])),
+    images: (conversation ?? []).flatMap((p) => p.images ?? []),
   }
   const asSingle: HybridTalk = {
     decisions,

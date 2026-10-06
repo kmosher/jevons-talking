@@ -26,6 +26,7 @@ import {
   isBare,
   isSpeak,
   swappable,
+  typingState,
   flagSwap,
   type Post,
   type Step,
@@ -100,7 +101,7 @@ export async function rateDrafts(question: string, drafts: string[], conversatio
   // marked down by how far its worst word's rating rises above a fine word's typical ~35%.
   const broken = (i: number) =>
     BROKEN ? Math.max(0, ...wordsOfDraft(drafts[i]).map((_, j) => (v(`${ids[i]}_w${j}`) - BROKEN_FLOOR) / (1 - BROKEN_FLOOR))) : 0
-  const said = (conversation ?? []).filter((p) => p.author.startsWith('you')).map((p) => p.text.replace(/ \[drafts you rejected: .*\]$/, ''))
+  const said = (conversation ?? []).filter((p) => p.author.startsWith('you')).map((p) => p.text)
   return drafts.map((d, i) => {
     const rating = adjust(d, question, v(ids[i]) * (1 - GENERIC_WEIGHT * v(`${ids[i]}_generic`)) * (1 - BROKEN_WEIGHT * broken(i)))
     return said.some((s) => repeats(d, s)) ? rating * REPEAT_PENALTY : rating
@@ -153,7 +154,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
   let stale = 0
 
   // Rates `drafts` alongside the step's menu questions, so rating costs no extra calls.
-  const ask = async (branchQuestions: Record<string, ReturnType<typeof choice>>, branchState: Record<string, { text_so_far: string; letters_typed: string; recent_actions: string | string[] }> | null, drafts: string[]) => {
+  const ask = async (branchQuestions: Record<string, ReturnType<typeof choice> | ReturnType<typeof noul>>, branchState: Record<string, ReturnType<typeof typingState> & { recent_actions: string | string[] }> | null, drafts: string[]) => {
     const draftIds = drafts.map((_, i) => `d${i}`)
     const state = {
       instructions: beamInstructions(mode, keyboard),
@@ -183,7 +184,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
     const ids = live.map((_, i) => `b${i}`)
     const menus = live.map((b) => menuFor(b, { ...MENU, minWordsToSpeak: MENU.minWordsToSpeak + prefill.length, keyboard, extra: extraWords }))
     const branchState = Object.fromEntries(
-      live.map((b, i) => [ids[i], { text_so_far: branchText(b) || '(nothing yet)', letters_typed: b.prefix || '(none)', recent_actions: recentActions(b) }]),
+      live.map((b, i) => [ids[i], { ...typingState(b, maxSteps), recent_actions: recentActions(b) }]),
     )
     const targets = live.map(swappable)
     const branchQuestions = Object.fromEntries(
