@@ -434,7 +434,20 @@ type Lease = { instance: string; expiresAt: string }
 
 async function holdLease(): Promise<boolean> {
   const now = Date.now()
-  if (now < leaseUntil && now - lastRenew < LEASE_RENEW_MS) return true
+  // Between renewals, a cheap read each poll confirms nobody has --forced the lease away.
+  if (now < leaseUntil && now - lastRenew < LEASE_RENEW_MS) {
+    try {
+      const { data } = await agent.com.atproto.repo.getRecord(LEASE)
+      const holder = (data.value as unknown as Lease).instance
+      if (holder === INSTANCE) return true
+      log(`lease lost to ${holder}; standing by`)
+      leaseUntil = 0
+      lastRenew = now
+      return false
+    } catch {
+      return true
+    }
+  }
   // A standby checks the lease every half minute, not every poll.
   if (!leaseUntil && lastRenew && !force && now - lastRenew < STANDBY_CHECK_MS) return false
   let current: { cid?: string; value?: Lease } = {}
