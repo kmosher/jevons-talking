@@ -11,7 +11,9 @@
 import { AutoProcessor, env, Florence2ForConditionalGeneration, RawImage } from '@huggingface/transformers'
 
 const MODEL = process.env.JEV_CAPTION_MODEL ?? 'onnx-community/Florence-2-base-ft'
-const DTYPE = process.env.JEV_CAPTION_DTYPE ?? 'fp32'
+// A dtype name, or JSON mapping each ONNX module to one (e.g. {"decoder_model_merged":"fp32",...}).
+const DTYPE_ENV = process.env.JEV_CAPTION_DTYPE ?? 'fp32'
+const DTYPE = DTYPE_ENV.startsWith('{') ? JSON.parse(DTYPE_ENV) : DTYPE_ENV
 const DEVICE = process.env.JEV_CAPTION_DEVICE ?? 'cpu'
 if (process.env.JEV_MODEL_CACHE) env.cacheDir = process.env.JEV_MODEL_CACHE
 
@@ -68,7 +70,7 @@ export async function describeImage(url: string): Promise<string | null> {
 if (import.meta.main) {
   let t = performance.now()
   await loadCaptioner()
-  console.log(`loaded ${MODEL} (${DTYPE}, ${DEVICE}) in ${((performance.now() - t) / 1000).toFixed(1)}s`)
+  console.log(`loaded ${MODEL} (${DTYPE_ENV}, ${DEVICE}) in ${((performance.now() - t) / 1000).toFixed(1)}s`)
   for (const url of process.argv.slice(2)) {
     t = performance.now()
     const d = await describeImage(url)
