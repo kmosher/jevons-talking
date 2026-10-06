@@ -227,14 +227,19 @@ export const MODES = {
     judge: 'a good answer to the question',
   },
   comeback: {
-    when: 'it is a remark, claim, joke, challenge or provocation rather than a real question',
+    when: 'it challenges, teases, insults or provokes you, or makes a joke at your expense',
     instruction: `The message is not really a question: reply with a short, witty comeback, then pick ${SPEAK}.`,
     judge: 'a good, witty reply to the message',
   },
   react: {
-    when: 'it shares a link, image or post and wants your reaction',
-    instruction: `React to what was shared with a short, opinionated sentence, then pick ${SPEAK}.`,
-    judge: 'a good reaction to what was shared',
+    when: 'it shares something (a link, image, post, news, a remark or an opinion) and invites your reaction',
+    instruction: `React to what was shared or said with a short, opinionated sentence, then pick ${SPEAK}.`,
+    judge: 'a good reaction to what was shared or said',
+  },
+  scene: {
+    when: 'it sets a scene, plays a game, or asks you to imagine, describe or role-play something',
+    instruction: `Play along: say in character what you see, do or feel, in a short sentence, then pick ${SPEAK}.`,
+    judge: 'a good in-character reply that plays along',
   },
   yesno: {
     when: 'it is a yes-or-no question',
@@ -518,6 +523,23 @@ export function save(t: Talk): string {
 
 // A bare yes or no ("no", "no.", "no. no", "not"): allowed, but it has to clear a higher bar to win.
 export const isBare = (text: string) => /^\s*((yes|yep|yeah|no|nope|not|maybe)[\s.,?!]*)+$/i.test(text)
+
+// Jev picks how its finished reply is capitalized, seeing each version: all lowercase (the
+// keyboard's natural output), sentence case, or ALL CAPS. JEV_CASE=off keeps lowercase.
+export const CASES = {
+  lower: (t: string) => t,
+  sentence: (t: string) => t.replace(/\bi\b/g, 'I').replace(/(^|[.!?…]\s+)([a-z])/g, (_, p, c) => p + c.toUpperCase()),
+  shout: (t: string) => t.toUpperCase(),
+} as const
+export type Case = keyof typeof CASES
+export async function chooseCase(question: string, answer: string, conversation?: Post[]): Promise<{ case: Case; confidence: number }> {
+  const r = await jev().systemOne({
+    state: { you: 'Jev, called JT on Bluesky', ...(conversation?.length ? { conversation_so_far: conversation } : {}), message: question, your_reply: answer },
+    questions: { case: choice('How do you want your reply capitalized?', Object.fromEntries(Object.entries(CASES).map(([k, f]) => [k, `"${f(answer)}"`]))) },
+  })
+  const a = r.answers.case as { choice: Case; confidence: number }
+  return { case: a.choice, confidence: a.confidence }
+}
 
 // Words in the conversation the predictor has never seen ("femshep", a name, a coinage), so Jev
 // can pick them whole instead of spelling them. With judge, Jev keeps only the ones it might use.

@@ -1,8 +1,9 @@
 // An optional last pass: Jev rates each word of its finished reply for "would you replace this if
 // you could?", then picks a replacement for the most-wanted one from the keyboard's own
-// predictions there. A fresh judge keeps whichever version rates better. JEV_REWRITE=on.
+// predictions there and WordNet's synonyms and broader terms for it. A fresh judge keeps whichever version rates better. JEV_REWRITE=off disables it.
 import { choice, noul } from '@typesafe-ai/sdk'
 import { rateDrafts } from './beam.ts'
+import { thesaurus } from './wordnet.ts'
 import { fillers, jev, type Mode, type Post, predict } from './talk.ts'
 
 export const REPLACE = 0.5
@@ -33,7 +34,7 @@ export async function rewrite(question: string, answer: string, opts: { conversa
   for (const t of targets) {
     const prev = t.i > 0 ? next[t.i - 1].toLowerCase().replace(/[^a-z0-9']+$/, '') : '<s>'
     const nextWord = next[t.i + 1]?.toLowerCase().replace(/[^a-z0-9']+$/, '')
-    const pool = [...new Set([...fillers(prev, nextWord, CANDIDATES), ...predict(prev, '', 20, 10), ...extraWords])].filter((w) => w !== t.word.toLowerCase())
+    const pool = [...new Set([...thesaurus(t.word, CANDIDATES), ...fillers(prev, nextWord, CANDIDATES), ...predict(prev, '', 20, 10), ...extraWords])].filter((w) => w !== t.word.toLowerCase())
     const options = Object.fromEntries([...(process.env.JEV_REWRITE_KEEP === "on" ? [[KEEP, `keep "${t.word}"`]] : []), [DROP, `delete "${t.word}"`], ...pool.map((w) => [`word: ${w}`, `replace "${t.word}" with "${w}"`])])
     const marked = next.map((w, i) => (i === t.i ? `[${w}]` : w)).join(' ')
     const c = await jev().systemOne({ state: { ...state, your_reply: marked }, questions: { pick: choice(`Which option do you pick for the bracketed word "${t.word}"?`, options) } })
