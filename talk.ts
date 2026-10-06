@@ -25,7 +25,7 @@ import { choice, noul, score, TypeSafeClient } from '@typesafe-ai/sdk'
 import { thesaurus } from './wordnet.ts'
 import { chunkOf, dasherMenu } from './dasher.ts'
 
-export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number; fix?: number; cased?: string; scores?: Scores }
+export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number; fix?: number; cased?: string; scores?: Scores; complete?: number }
 export type Talk = { question: string; answer: string; finished: boolean; steps: Step[] }
 // A context entry. Images (descriptions plus alt text) and JT's rejected drafts ride in their
 // own fields, not inside the text, so Jev can tell what was said from what was seen or tried.
@@ -397,6 +397,8 @@ export type Branch = {
   rejected: Map<string, Set<string>>
   steps: Step[]
   // A word Jev said it would replace if it could: the next menu offers swaps for it.
+  // How many times a short draft's SPEAK was checked for completeness (JEV_SPEAK_GATE).
+  gateChecks?: number
   swap?: { idx: number; word: string; kinds: SwapKind[] }
   // Words Jev said it would replace, with how strongly (JEV_BEAM_FLAG ranks branches by them).
   flaws?: { idx: number; word: string; p: number }[]
@@ -688,6 +690,12 @@ export function typingState(b: Branch, maxSteps: number): Record<string, string 
   }
 }
 
+// SPEAK on a draft of SHORT_REPLY words or fewer is checked for completeness first
+// (JEV_SPEAK_GATE=off skips it); longer drafts may still stop on a fragment when struggling.
+export const SPEAK_GATE = process.env.JEV_SPEAK_GATE !== 'off'
+const SHORT_REPLY = 4
+const MAX_GATE_CHECKS = 3
+
 export const recentActions = (b: Branch) => {
   const recent = b.steps.slice(-HISTORY).map((s) => shown(s.pick))
   return recent.length ? recent : '(none)'
@@ -724,6 +732,28 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
       if (casedLast) {
         b.steps.at(-1)!.cased = casedLast
         log(`   cased "${caseT!.word}" ${casedLast}`)
+      }
+      // A short draft may only stop if Jev says it's a complete thought; otherwise the pick becomes
+      // the best other option from the same call (no re-ask), and SPEAK is barred at this text.
+      const shortReply = b.words.filter((w) => /\w/.test(w)).length <= SHORT_REPLY
+      if (SPEAK_GATE && shortReply && (b.gateChecks ?? 0) < MAX_GATE_CHECKS) {
+        b.gateChecks = (b.gateChecks ?? 0) + 1
+        const g = await client.systemOne({
+          state: { ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, reply: branchText(b) },
+          questions: { complete: noul('Is the reply a complete thought, rather than cut off mid-sentence?') },
+        })
+        const complete = (g.answers.complete as { noul: number }).noul
+        const step = b.steps.at(-1)!
+        step.complete = complete
+        const next = Object.entries(a.probabilities).filter(([o]) => !isSpeak(o)).sort((x, y) => y[1] - x[1])[0]
+        if (complete < 0.5 && next) {
+          log(`   "${branchText(b)}" isn't complete (${(complete * 100).toFixed(0)}%); taking ${next[0]} instead`)
+          reject(b, branchKey(b), SPEAK)
+          step.pick = next[0]
+          step.confidence = next[1]
+          applyPick(b, next[0])
+          continue
+        }
       }
       if (!confirmSpeak || b.rejections >= maxRejections) break
       // A second opinion on stopping: a "no" withdraws SPEAK from this point and Jev carries on.

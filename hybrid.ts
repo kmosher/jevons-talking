@@ -6,7 +6,7 @@
 // Usage: npm run -s talk:hybrid -- [--q="..."] [--good=0.35]
 import { type BeamTalk, beam, rateDrafts } from './beam.ts'
 import { type Rewrite, rewrite } from './rewrite.ts'
-import { type Case, CASES, chooseCase, classify, moderate, type Scores, isBare, unfamiliarWords, usefulWords, verdict, relevantContext, type Keyboard, type Mode, type Post, save, talk } from './talk.ts'
+import { SPEAK_GATE, type Case, CASES, chooseCase, classify, moderate, type Scores, isBare, unfamiliarWords, usefulWords, verdict, relevantContext, type Keyboard, type Mode, type Post, save, talk } from './talk.ts'
 
 const SINGLE_STEPS = 40
 // The single path's answer is kept if it rates at least this; otherwise the beam runs.
@@ -111,7 +111,7 @@ async function compose(question: string, opts: HybridOptions = {}): Promise<Hybr
   const rating = single.answer ? ratings[pick] : 0
   // One call per pick and per final-answer check, plus the rating calls and the classification.
   const singleCalls =
-    drafts.reduce((n, d) => n + d.t.steps.length + d.t.steps.filter((s) => s.final !== undefined).length, 0) + drafts.length + (classified ? 1 : 0) + (v ? 1 : 0) + (cwMode === 'judge' && unfamiliar.length ? 1 : 0) + filterCalls
+    drafts.reduce((n, d) => n + d.t.steps.length + d.t.steps.filter((s) => s.final !== undefined).length + d.t.steps.filter((s) => s.complete !== undefined).length, 0) + drafts.length + (classified ? 1 : 0) + (v ? 1 : 0) + (cwMode === 'judge' && unfamiliar.length ? 1 : 0) + filterCalls
   log(`single path: "${single.answer}" (${chosenKeyboard}) rated ${(rating * 100).toFixed(0)}% in ${singleCalls} calls`)
   // The question itself is the last conversation entry, so it isn't counted as context.
   const decisions: Decisions = {
@@ -137,7 +137,8 @@ async function compose(question: string, opts: HybridOptions = {}): Promise<Hybr
   // An acknowledgement or comeback of two words or fewer goes to the beam even when it rated
   // well, so the search can get past a first word that SPEAK made too easy to stop at
   // (JEV_EXPLORE=off disables this).
-  const explore = process.env.JEV_EXPLORE !== 'off' && (mode === 'acknowledge' || mode === 'comeback') && single.answer.split(/\s+/).filter((w) => /\w/.test(w)).length <= 2
+  // With the SPEAK gate on, short fragments are caught while writing, so this is off by default.
+  const explore = (process.env.JEV_EXPLORE === 'on' || (process.env.JEV_EXPLORE !== 'off' && !SPEAK_GATE)) && (mode === 'acknowledge' || mode === 'comeback') && single.answer.split(/\s+/).filter((w) => /\w/.test(w)).length <= 2
   if (!explore && rating >= (isBare(single.answer) ? BARE_BAR : good)) return asSingle
   if (explore) log(`exploring past "${single.answer}"`)
 
