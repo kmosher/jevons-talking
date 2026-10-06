@@ -33,6 +33,8 @@ import {
   BEAM_FLAG,
   flawFactor,
   lastWord,
+  presentMenu,
+  unpresent,
   caseTarget,
   caseQuestion,
   applyCase,
@@ -196,16 +198,17 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
     )
     const targets = live.map((b) => swappable(b) ?? (BEAM_FLAG ? lastWord(b) : undefined))
     const caseTargets = live.map(caseTarget)
+    const presented = menus.map(presentMenu)
     const branchQuestions = Object.fromEntries(
       ids.flatMap((id, i) => [
-        [id, choice(`Which menu option do you pick next for branch \`${id}\`?`, menus[i])],
+        [id, choice(`Which menu option do you pick next for branch \`${id}\`?`, presented[i].menu)],
         ...(targets[i] ? Object.entries(fixQuestions(targets[i]!.word, `the last word of branch \`${id}\`'s text_so_far`)).map(([k, q]) => [`${id}_${k}`, q]) : []),
         ...(caseTargets[i] ? [[`${id}_case`, caseQuestion(caseTargets[i]!.word, `the last word of branch \`${id}\`'s text_so_far ("${caseTargets[i]!.word}")`)]] : []),
       ]),
     )
     const raw = await ask(branchQuestions, branchState, unrated())
     if (!raw) break
-    const answers = raw as Record<string, { choice: string; confidence: number; probabilities: Record<string, number> }>
+    const answers = Object.fromEntries(ids.map((id, i) => [id, unpresent((raw as Record<string, { choice: string; confidence: number; probabilities: Record<string, number> }>)[id], presented[i].back)]))
     const fixes = raw as Record<string, { noul?: number }>
 
     const children: Branch[] = []

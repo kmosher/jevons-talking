@@ -197,6 +197,20 @@ export function predict(prev: string, prefix: string, n: number, common: number,
 }
 
 // --- Menu loop ---------------------------------------------------------------
+// With JEV_KEY_STYLE=angle, letter and punctuation keys are shown to Jev as <a> and <?> instead
+// of "letter: a" and "key: ?", like the <end-word> control keys. Only the names Jev sees change:
+// presentMenu renames a menu on the way out, and the returned map turns Jev's answer back.
+const ANGLE = process.env.JEV_KEY_STYLE === 'angle'
+export const shown = (o: string) => (!ANGLE ? o : o.startsWith('letter: ') ? `<${o.slice(8)}>` : o.startsWith('key: ') ? `<${o.slice(5)}>` : o)
+export function presentMenu(menu: Record<string, string>): { menu: Record<string, string>; back: (o: string) => string } {
+  if (!ANGLE) return { menu, back: (o) => o }
+  const names = new Map(Object.keys(menu).map((o) => [shown(o), o]))
+  return { menu: Object.fromEntries(Object.entries(menu).map(([o, d]) => [shown(o), d])), back: (o) => names.get(o) ?? o }
+}
+// A choice answer with its option names turned back into the menu's own.
+export function unpresent<T extends { choice: string; probabilities: Record<string, number> }>(a: T, back: (o: string) => string): T {
+  return { ...a, choice: back(a.choice), probabilities: Object.fromEntries(Object.entries(a.probabilities).map(([o, p]) => [back(o), p])) }
+}
 // Spell out the cost of a near-miss (JEV_LETTER_HINT=off drops this): picking a word that isn't quite
 // right and deleting it takes two picks, while one or two letters bring up better candidates.
 const LETTER_HINT = process.env.JEV_LETTER_HINT !== 'off'
@@ -216,10 +230,10 @@ export const instructions = `${process.env.JEV_NAME === 'off' ? '' : 'You are Je
 communication menu. You cannot type freely: each turn you pick exactly one
 menu option. Options are:
 - "word: X" — append the predicted word X to your sentence.
-- "letter: X" — type a letter to narrow the word predictions to words starting with what you've typed
+- "${ANGLE ? '<x>' : 'letter: X'}" — type a letter to narrow the word predictions to words starting with what you've typed
   (use this when the word you want is not among the predictions). Any letter or digit can be typed, so
   you can spell any word, then enter it as typed.${LETTER_HINT}
-- "key: X" — type the punctuation mark X: every mark on a keyboard, plus — and …, and any mark can be
+- "${ANGLE ? '<.>' : 'key: X'}" — type a punctuation mark${ANGLE ? ' (the mark between the brackets)' : ' X'}: every mark on a keyboard, plus — and …, and any mark can be
   typed as often as you like.
 - "${SPACE}" — end the word you're typing, exactly as typed (after letters, punctuation or both).
 - "backspace" (undo the last character typed, or else the last word), and "${SPEAK}" (finish: your text is
@@ -670,7 +684,7 @@ export function typingState(b: Branch, maxSteps: number): Record<string, string 
 }
 
 export const recentActions = (b: Branch) => {
-  const recent = b.steps.slice(-HISTORY).map((s) => s.pick)
+  const recent = b.steps.slice(-HISTORY).map((s) => shown(s.pick))
   return recent.length ? recent : '(none)'
 }
 
@@ -684,13 +698,14 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
     const state = { instructions: extraInstructions ? `${instructionsFor(mode, keyboard)}\n${extraInstructions}` : instructionsFor(mode, keyboard), ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recentActions(b), ...typingState(b, maxSteps) }
     const target = swappable(b)
     const caseT = caseTarget(b)
-    const questions = { next: choice('Which menu option do you pick next?', menu), ...(target ? fixQuestions(target.word) : {}), ...(caseT ? { case: caseQuestion(caseT.word) } : {}), ...(MODERATE_EVERY && b.words.length ? rubricQuestions('text_so_far as a reply') : {}) }
+    const shownMenu = presentMenu(menu)
+    const questions = { next: choice('Which menu option do you pick next?', shownMenu.menu), ...(target ? fixQuestions(target.word) : {}), ...(caseT ? { case: caseQuestion(caseT.word) } : {}), ...(MODERATE_EVERY && b.words.length ? rubricQuestions('text_so_far as a reply') : {}) }
     if (dryRun) {
       console.log(JSON.stringify({ state, questions }, null, 2))
       break
     }
     const r = await client.systemOne({ state, questions })
-    const a = r.answers.next as { choice: string; confidence: number; probabilities: Record<string, number> }
+    const a = unpresent(r.answers.next as { choice: string; confidence: number; probabilities: Record<string, number> }, shownMenu.back)
     const fixes = Object.fromEntries(['fix', 'fix_form', 'fix_syn'].filter((k) => k in r.answers).map((k) => [k, ((r.answers as Record<string, unknown>)[k] as { noul: number }).noul])) as { fix?: number; fix_form?: number; fix_syn?: number }
     const fixVals = Object.values(fixes)
     const fix = fixVals.length ? Math.max(...fixVals) : undefined
