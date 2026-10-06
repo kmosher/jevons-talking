@@ -20,7 +20,7 @@ import type { BeamTalk } from './beam.ts'
 import { describeImage, loadCaptioner } from './caption.ts'
 import { hybrid } from './hybrid.ts'
 import { renderPng } from './render.ts'
-import { containsBlocked, meanConfidence, type Post, save, type Step, type Talk } from './talk.ts'
+import { containsBlocked, isSpeak, meanConfidence, type Post, save, type Step, type Talk } from './talk.ts'
 
 const HANDLE = process.env.BLUESKY_HANDLE ?? 'jevons-talking.bsky.social'
 const PASSWORD = process.env.BLUESKY_APP_PASSWORD
@@ -100,7 +100,7 @@ await loadCaptioner().then(
 const pickLabel = (step: Step) =>
   step.pick === 'backspace'
     ? '⌫'
-    : step.pick === 'SPEAK'
+    : isSpeak(step.pick)
       ? step.final !== undefined && step.final < 0.5 ? '🔊✗' : '🔊'
       : step.pick.replace(/^(word|letter): /, '')
 

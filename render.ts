@@ -7,7 +7,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { Resvg } from '@resvg/resvg-js'
 import type { BeamTalk } from './beam.ts'
 import type { HybridTalk } from './hybrid.ts'
-import { applyPick, branchText, meanConfidence, newBranch, type Step, type Talk } from './talk.ts'
+import { applyPick, branchText, isSpace, isSpeak, meanConfidence, newBranch, type Step, type Talk } from './talk.ts'
 
 const W = 1080
 const PAD = 40
@@ -24,18 +24,18 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…`
 // Rough advance width; good enough for sizing chips.
 const textWidth = (s: string, size: number) => [...s].reduce((w, ch) => w + (/[A-Z]/.test(ch) ? 0.72 : 0.56), 0) * size
 
-const label = (option: string) => (option === 'backspace' ? '⌫ delete' : option.replace(/^(word|letter|key): /, ''))
+const label = (option: string) => (option === 'backspace' ? '⌫ delete' : isSpeak(option) ? 'SPEAK' : isSpace(option) ? 'SPACE' : option.replace(/^(word|letter|key): /, ''))
 // A SPEAK that Jev then said wasn't final.
-const withdrawn = (step: Step) => step.pick === 'SPEAK' && step.final !== undefined && step.final < 0.5
+const withdrawn = (step: Step) => isSpeak(step.pick) && step.final !== undefined && step.final < 0.5
 const kind = (option: string) =>
-  option === 'SPEAK' ? 'speak' : option === 'backspace' ? 'backspace' : option.startsWith('letter: ') ? 'letter' : 'word'
+  isSpeak(option) ? 'speak' : option === 'backspace' ? 'backspace' : option.startsWith('letter: ') ? 'letter' : 'word'
 
 // The text (and any letters typed toward the next word) after each step, using talk()'s own editing
 // rules; `prefill` is text typed before the first pick (a yes-or-no verdict).
 function replay(steps: Step[], prefill: string[] = []): { text: string; prefix: string }[] {
   const b = newBranch(prefill)
   return steps.map((s) => {
-    if (s.pick !== 'SPEAK') applyPick(b, s.pick)
+    if (!isSpeak(s.pick)) applyPick(b, s.pick)
     return { text: branchText(b), prefix: b.prefix }
   })
 }

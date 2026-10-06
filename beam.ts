@@ -24,6 +24,7 @@ import {
   menuFor,
   newBranch,
   isBare,
+  isSpeak,
   type Post,
   type Step,
   recentActions,
@@ -184,14 +185,14 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
         ? [a.choice]
         : [a.choice, ...ranked.map(([o]) => o).filter((o) => o !== a.choice && !o.startsWith('letter: ') && a.probabilities[o] >= split)].slice(0, maxSplit)
       // A draft that stops also carries on along its best alternative, so longer answers get written too.
-      const goOn = ranked.find(([o]) => o !== 'SPEAK')?.[0]
-      if (picks.includes('SPEAK') && goOn && !picks.includes(goOn)) picks.push(goOn)
+      const goOn = ranked.find(([o]) => !isSpeak(o))?.[0]
+      if (picks.some(isSpeak) && goOn && !picks.includes(goOn)) picks.push(goOn)
       for (const pick of picks) {
         const child = cloneBranch(b)
         const p = a.probabilities[pick] ?? a.confidence
         child.steps.push({ menu: Object.keys(menus[i]), pick, confidence: p, probabilities: a.probabilities })
         child.score *= p
-        if (pick === 'SPEAK') finished.push(child)
+        if (isSpeak(pick)) finished.push(child)
         else {
           applyPick(child, pick)
           children.push(child)

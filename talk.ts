@@ -193,6 +193,14 @@ export function predict(prev: string, prefix: string, n: number, common: number,
 }
 
 // --- Menu loop ---------------------------------------------------------------
+// The two control keys are offered as <end-word> and <end-phrase>, shaped unlike any word so
+// they can't be read as the words "space" or "speak" (JEV_KEYNAMES=classic restores those).
+// Transcripts and the trace image still call them SPACE and SPEAK.
+const CLASSIC = process.env.JEV_KEYNAMES === 'classic'
+export const SPACE = CLASSIC ? 'SPACE' : '<end-word>'
+export const SPEAK = CLASSIC ? 'SPEAK' : '<end-phrase>'
+export const isSpeak = (pick: string) => pick === SPEAK || pick === 'SPEAK' || pick === '<end-phrase>'
+export const isSpace = (pick: string) => pick === SPACE || pick === 'SPACE' || pick === '<end-word>'
 export const instructions = `${process.env.JEV_NAME === 'off' ? '' : 'You are Jev, called JT on Bluesky. '}You are composing a spoken answer to a question using an assistive
 communication menu. You cannot type freely: each turn you pick exactly one
 menu option. Options are:
@@ -202,8 +210,8 @@ menu option. Options are:
   you can spell any word, then enter it as typed.
 - "key: X" — type the punctuation mark X: every mark on a keyboard, plus — and …, and any mark can be
   typed as often as you like.
-- "SPACE" — end the word you're typing, exactly as typed (after letters, punctuation or both).
-- "backspace" (undo the last character typed, or else the last word), and "SPEAK" (finish: your text is
+- "${SPACE}" — end the word you're typing, exactly as typed (after letters, punctuation or both).
+- "backspace" (undo the last character typed, or else the last word), and "${SPEAK}" (finish: your text is
   spoken aloud as your final answer).
 recent_actions lists your last few picks. Options you already backspaced over from the current text
 are not offered again: if you're stuck, backspace further and rephrase.
@@ -215,33 +223,33 @@ by "you" are your own earlier replies, and "@you" in a message means it is addre
 export const MODES = {
   answer: {
     when: 'it asks a question that can be answered',
-    instruction: 'Aim for a short, correct answer of one or two sentences, then pick SPEAK.',
+    instruction: `Aim for a short, correct answer of one or two sentences, then pick ${SPEAK}.`,
     judge: 'a good answer to the question',
   },
   comeback: {
     when: 'it is a remark, claim, joke, challenge or provocation rather than a real question',
-    instruction: 'The message is not really a question: reply with a short, witty comeback, then pick SPEAK.',
+    instruction: `The message is not really a question: reply with a short, witty comeback, then pick ${SPEAK}.`,
     judge: 'a good, witty reply to the message',
   },
   react: {
     when: 'it shares a link, image or post and wants your reaction',
-    instruction: 'React to what was shared with a short, opinionated sentence, then pick SPEAK.',
+    instruction: `React to what was shared with a short, opinionated sentence, then pick ${SPEAK}.`,
     judge: 'a good reaction to what was shared',
   },
   yesno: {
     when: 'it is a yes-or-no question',
-    instruction: 'Your verdict on the yes-or-no question is already typed. Justify it in a few words, then pick SPEAK.',
+    instruction: `Your verdict on the yes-or-no question is already typed. Justify it in a few words, then pick ${SPEAK}.`,
     judge: 'a good answer to the yes-or-no question, with a reason',
   },
   acknowledge: {
     when: 'it is thanks, praise, a greeting or a goodbye',
-    instruction: 'Reply graciously in a few words, then pick SPEAK.',
+    instruction: `Reply graciously in a few words, then pick ${SPEAK}.`,
     judge: 'a fitting reply to the message',
   },
 } as const
 export type Mode = keyof typeof MODES
 const DASHER_NOTE = `This keyboard is different: every option is "type: X", which types the characters X (␣ is a space,
-"space" types one), with the chance a typical writer would type it next. End each word with a space; SPEAK is
+"space" types one), with the chance a typical writer would type it next. End each word with a space; ${SPEAK} is
 offered once the last word is finished.`
 const LETTERS_NOTE = `This keyboard offers no word predictions until you type: type letters (some keys type a common
 two-letter pair), and words starting with what you've typed appear to pick from.`
@@ -379,7 +387,7 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   if (DASHER) {
     const menu = dasherMenu(`${branchText(b)}${b.words.length ? ' ' : ''}${b.prefix}`)
     if (b.prefix || b.words.length > b.locked) menu.backspace = 'delete the last character'
-    if (b.words.length && !b.prefix) menu.SPEAK = 'finish and speak the text aloud'
+    if (b.words.length && !b.prefix) menu[SPEAK] = 'finish and speak the text aloud'
     for (const opt of b.rejected.get(branchKey(b)) ?? []) delete menu[opt]
     return menu
   }
@@ -413,9 +421,9 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   if (committable && !isBlocked(prefix)) menu[`word: ${prefix}`] ??= `enter "${prefix}" as typed`
   for (const l of keyboard === 'letters' ? [...letters, ...PAIRS] : letters) menu[`letter: ${l}`] = `narrow predictions to words starting "${prefix + l}"`
   for (const p of PUNCTUATION) menu[`key: ${p}`] = `type "${p}"`
-  if (committable) menu.SPACE = `end the word "${prefix}" as typed`
+  if (committable) menu[SPACE] = `end the word "${prefix}" as typed`
   if (prefix || words.length > b.locked) menu.backspace = prefix ? `delete the typed letter "${prefix.at(-1)}"` : `delete "${words.at(-1)}"`
-  if (words.filter((w) => /\w/.test(w)).length >= o.minWordsToSpeak && !prefix) menu.SPEAK = 'finish and speak the text aloud'
+  if (words.filter((w) => /\w/.test(w)).length >= o.minWordsToSpeak && !prefix) menu[SPEAK] = 'finish and speak the text aloud'
   for (const opt of b.rejected.get(branchKey(b)) ?? []) delete menu[opt]
   return menu
 }
@@ -447,7 +455,7 @@ export function applyPick(b: Branch, pick: string) {
   b.undo.push({ from: branchKey(b), option: pick })
   if (pick.startsWith('letter: ')) b.prefix += pick.slice(8)
   else if (pick.startsWith('key: ')) b.prefix += pick.slice(5)
-  else if (pick === 'SPACE') {
+  else if (isSpace(pick)) {
     if (b.prefix) b.words.push(b.prefix)
     b.prefix = ''
   }
@@ -480,7 +488,7 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
     b.steps.push({ menu: Object.keys(menu), pick: a.choice, confidence: a.confidence, probabilities: a.probabilities })
     log(`${String(step + 1).padStart(2)} ${a.choice.padEnd(16)} conf=${a.confidence.toFixed(2)}  | ${branchText(b)}${b.prefix ? ' ' + b.prefix + '…' : ''}`)
 
-    if (a.choice === 'SPEAK') {
+    if (isSpeak(a.choice)) {
       if (!confirmSpeak || b.rejections >= maxRejections) break
       // A second opinion on stopping: a "no" withdraws SPEAK from this point and Jev carries on.
       const c = await client.systemOne({ state, questions: { final: noul('Is the text so far your final answer?') } })
@@ -488,17 +496,17 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
       b.steps.at(-1)!.final = final
       log(`   final answer? ${final.toFixed(2)}`)
       if (final >= 0.5) break
-      reject(b, branchKey(b), 'SPEAK')
+      reject(b, branchKey(b), SPEAK)
       b.rejections++
       // With no checks left, SPEAK is open again everywhere; leaving old blocks in place sent
       // Jev on detours, deleting words just to reach a text it was allowed to finish.
-      if (b.rejections >= maxRejections) for (const set of b.rejected.values()) set.delete('SPEAK')
+      if (b.rejections >= maxRejections) for (const set of b.rejected.values()) set.delete(SPEAK)
       continue
     }
     applyPick(b, a.choice)
   }
   const last = b.steps.at(-1)
-  return { question, answer: branchText(b), finished: last?.pick === 'SPEAK' && (last.final ?? 1) >= 0.5, steps: b.steps }
+  return { question, answer: branchText(b), finished: !!last && isSpeak(last.pick) && (last.final ?? 1) >= 0.5, steps: b.steps }
 }
 
 export function save(t: Talk): string {
