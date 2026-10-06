@@ -921,7 +921,9 @@ export async function usefulWords(question: string, conversation: Post[] | undef
 export const UNSURE = 0.1
 // "maybe" is for a real toss-up; "idk" is for a question Jev says it doesn't know the answer to,
 // which a probability near 50% alone can't tell apart.
-export const IDK = 0.35
+// Unknowables (rain on a date in 2031, life on other planets) score 4-9% on "know"; questions Jev
+// has a view on but hedges, like "are you like a horse?", land around 30-35%.
+export const IDK = 0.2
 const VERDICT_QUESTIONS = {
   yes: noul('Is the answer to the yes-or-no question in the message yes?'),
   know: noul('Do you actually know the answer to the yes-or-no question in the message?'),
