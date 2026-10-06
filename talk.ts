@@ -699,7 +699,7 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
     const target = swappable(b)
     const caseT = caseTarget(b)
     const shownMenu = presentMenu(menu)
-    const questions = { next: choice('Which menu option do you pick next?', shownMenu.menu), ...(target ? fixQuestions(target.word) : {}), ...(caseT ? { case: caseQuestion(caseT.word) } : {}), ...(MODERATE_EVERY && b.words.length ? rubricQuestions('text_so_far as a reply') : {}) }
+    const questions = { next: choice('Which menu option do you pick next?', shownMenu.menu), ...(target ? fixQuestions(target.word) : {}), ...(caseT ? { case: caseQuestion(caseT.word) } : {}), ...(MODERATE_EVERY && b.words.length ? rubricQuestions('text_so_far, as your reply so far') : {}) }
     if (dryRun) {
       console.log(JSON.stringify({ state, questions }, null, 2))
       break
@@ -772,7 +772,11 @@ export const RUBRICS = ['funny', 'insightful', 'informative', 'interesting'] as 
 export type Scores = Record<(typeof RUBRICS)[number], number>
 const SCORE_OPTIONS = Object.fromEntries([0, 1, 2, 3, 4, 5].map((n) => [String(n), `${n} out of 5`]))
 export const rubricQuestions = (what: string) =>
-  Object.fromEntries(RUBRICS.map((r) => [`score_${r}`, choice(`Slashdot-style, how ${r} is ${what}, from 0 to 5?`, SCORE_OPTIONS)]))
+  Object.fromEntries(RUBRICS.map((r) => [`score_${r}`, choice(`How ${r} is ${what}, from 0 to 5?`, SCORE_OPTIONS)]))
+// Asked plainly, Jev scored nearly everything under 1. Judging as the reply's proud author, by what
+// the keyboard allows, spreads the scores (best rubric averaged 1.0 -> 1.5 on 14 live replies).
+export const MODERATION_NOTE =
+  'You wrote this reply yourself, picking one word at a time from a tiny predictive keyboard that cannot write freely. Judge it kindly, as its proud author, by what you managed with that keyboard.'
 // Each score is the expected value over Jev's probabilities, so it isn't stuck on whole numbers.
 export const readScores = (answers: Record<string, unknown>): Scores | undefined => {
   if (!RUBRICS.every((r) => answers[`score_${r}`])) return undefined
@@ -782,8 +786,8 @@ export const readScores = (answers: Record<string, unknown>): Scores | undefined
 }
 export async function moderate(question: string, answer: string, conversation?: Post[]): Promise<Scores> {
   const r = await jev().systemOne({
-    state: { ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, reply: answer },
-    questions: rubricQuestions('the reply'),
+    state: { note: MODERATION_NOTE, ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, reply: answer },
+    questions: rubricQuestions('your reply'),
   })
   return readScores(r.answers as Record<string, unknown>)!
 }
