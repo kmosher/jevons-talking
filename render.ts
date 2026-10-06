@@ -213,3 +213,57 @@ if (import.meta.main) {
   writeFileSync(out, png)
   console.log(`wrote ${out} (${(png.length / 1024).toFixed(0)} KB)`)
 }
+
+// --- Alt text ------------------------------------------------------------------
+export const pickLabel = (step: Step) =>
+  step.pick === 'backspace'
+    ? '⌫'
+    : isSpeak(step.pick)
+      ? step.final !== undefined && step.final < 0.5 ? 'SPEAK(withdrawn)' : 'SPEAK'
+      : isSpace(step.pick)
+        ? 'SPACE'
+        : step.pick.replace(/^(word|letter|key): /, '')
+
+// The trace image's alt text: what was decided before writing, the drafts and how a fresh Jev
+// rated them, then every key pressed with its confidence, cut to fit. The "Rejected drafts:"
+// line is read back (rejectedDrafts) when JT's own post turns up in a later thread.
+const ALT_LIMIT = 1900
+const altPct = (p: number) => `${Math.round(p * 100)}%`
+export function altText(t: Talk): string {
+  const h = t as Partial<HybridTalk>
+  const d = h.decisions
+  const lines = [`How JT typed "${t.answer}", one key pick at a time.`]
+  if (d) {
+    const before = [
+      `Reply type: ${d.mode}${d.modeConfidence !== undefined ? ` (${altPct(d.modeConfidence)})` : ''}.`,
+      d.verdict && `Verdict, asked before typing: ${d.verdict.word} (yes ${altPct(d.verdict.yes)}).`,
+      d.contextTotal ? `Kept ${d.contextKept} of ${d.contextTotal} thread posts as relevant.` : '',
+      d.images.length ? `Saw ${d.images.length === 1 ? 'an image' : `${d.images.length} images`}: ${d.images.map((i) => `"${i.slice(0, 120)}"`).join('; ')}.` : '',
+      d.contextWords?.some((w) => w.p >= 0.5) ? `Words added from the thread: ${d.contextWords.filter((w) => w.p >= 0.5).map((w) => w.word).join(', ')}.` : '',
+    ]
+    lines.push(before.filter(Boolean).join(' '))
+  }
+  const judged = Object.entries(h.judged ?? {}).sort((a, b) => b[1] - a[1])
+  if (judged.length > 1) {
+    lines.push(`Path: ${h.path === 'beam' ? 'beam search' : 'single draft'}. Drafts as a fresh Jev rated them: ${judged.map(([a, r]) => `"${a}" ${altPct(r)}`).join(', ')}.`)
+    const rejected = judged.filter(([a]) => a.toLowerCase() !== t.answer.toLowerCase()).slice(0, 3)
+    if (rejected.length) lines.push(`Rejected drafts: ${rejected.map(([a]) => `"${a}"`).join(' | ')}`)
+  } else if (h.path) lines.push(`Path: single draft, rated ${judged[0] ? altPct(judged[0][1]) : 'n/a'} by a fresh Jev.`)
+  if (h.rewrite?.kept === 'after') lines.push(`Rewritten after: ${h.rewrite.edits.map((e) => `${e.from} → ${e.to || '(deleted)'}`).join(', ')}.`)
+  if (h.case && h.case.case !== 'lower') lines.push(`Jev chose ${h.case.case === 'shout' ? 'ALL CAPS' : 'sentence case'} (${altPct(h.case.confidence)}).`)
+  lines.push(`${t.steps.length} picks, ${h.calls ?? '?'} Jev calls, mean confidence ${meanConfidence(t).toFixed(2)}.`)
+  let alt = lines.join('\n')
+  let keys = '\nKeys pressed (confidence):'
+  for (const s of t.steps) {
+    const k = ` ${pickLabel(s)} ${altPct(s.confidence)},`
+    if (alt.length + keys.length + k.length > ALT_LIMIT - 4) {
+      keys += ' …'
+      break
+    }
+    keys += k
+  }
+  return (alt + keys.replace(/,$/, '.')).slice(0, ALT_LIMIT)
+}
+// The drafts JT passed over, from the alt text of its own trace image.
+export const rejectedDrafts = (alt?: string) => [...(alt?.match(/^Rejected drafts: (.*)$/m)?.[1].matchAll(/"([^"]*)"/g) ?? [])].map((m) => m[1])
+

@@ -18,9 +18,9 @@ import { hostname } from 'node:os'
 import { AppBskyFeedDefs, AtpAgent, RichText } from '@atproto/api'
 import type { BeamTalk } from './beam.ts'
 import { describeImage, loadCaptioner } from './caption.ts'
-import { hybrid } from './hybrid.ts'
-import { renderPng } from './render.ts'
-import { containsBlocked, isSpeak, meanConfidence, type Post, save, type Step, type Talk } from './talk.ts'
+import { type HybridTalk, hybrid } from './hybrid.ts'
+import { altText, pickLabel, rejectedDrafts, renderPng } from './render.ts'
+import { containsBlocked, isSpace, isSpeak, meanConfidence, type Post, save, type Step, type Talk } from './talk.ts'
 
 const HANDLE = process.env.BLUESKY_HANDLE ?? 'jevons-talking.bsky.social'
 const PASSWORD = process.env.BLUESKY_APP_PASSWORD
@@ -97,13 +97,6 @@ await loadCaptioner().then(
 )
 
 // --- Formatting ----------------------------------------------------------------
-const pickLabel = (step: Step) =>
-  step.pick === 'backspace'
-    ? '⌫'
-    : isSpeak(step.pick)
-      ? step.final !== undefined && step.final < 0.5 ? '🔊✗' : '🔊'
-      : step.pick.replace(/^(word|letter): /, '')
-
 function headline(t: Talk): string {
   if (containsBlocked(t.answer)) return '(Jev composed something I won’t post.)'
   const answer = t.answer || '…'
@@ -175,7 +168,11 @@ async function imageNotes(p: AppBskyFeedDefs.PostView): Promise<string> {
 // A post as a context entry: the bot's own posts as "you", without stats or trace images.
 async function asContext(p: AppBskyFeedDefs.PostView, suffix = ''): Promise<Post> {
   const text = (p.record as { text?: string }).text ?? ''
-  if (p.author.did === agent.session?.did) return { author: `you${suffix}`, text: ownText(text) }
+  if (p.author.did === agent.session?.did) {
+    // Jev also sees the drafts it passed over, as readers of the trace image can.
+    const passed = rejectedDrafts((p.embed as { images?: ImageView[] } | undefined)?.images?.[0]?.alt)
+    return { author: `you${suffix}`, text: ownText(text) + (passed.length ? ` [drafts you rejected: ${passed.map((d) => `"${d}"`).join(', ')}]` : '') }
+  }
   return { author: `@${p.author.handle}${suffix}`, text: addressed(text) + (await imageNotes(p)) }
 }
 
@@ -217,7 +214,7 @@ async function traceImage(t: Talk, full = false) {
   for (const zoom of [1.5, 1]) if (img.png.length > IMAGE_LIMIT) img = renderPng(t, zoom, full)
   if (img.png.length > IMAGE_LIMIT) return undefined
   const { data } = await agent.uploadBlob(img.png, { encoding: 'image/png' })
-  const alt = traceChunks(t, 100_000)[0].slice(0, 1900)
+  const alt = altText(t)
   return {
     $type: 'app.bsky.embed.images',
     images: [{ image: data.blob, alt, aspectRatio: { width: img.width, height: img.height } }],

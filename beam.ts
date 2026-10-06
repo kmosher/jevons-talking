@@ -98,13 +98,27 @@ export async function rateDrafts(question: string, drafts: string[], conversatio
   // marked down by how far its worst word's rating rises above a fine word's typical ~35%.
   const broken = (i: number) =>
     BROKEN ? Math.max(0, ...wordsOfDraft(drafts[i]).map((_, j) => (v(`${ids[i]}_w${j}`) - BROKEN_FLOOR) / (1 - BROKEN_FLOOR))) : 0
-  return drafts.map((d, i) => adjust(d, question, v(ids[i]) * (1 - GENERIC_WEIGHT * v(`${ids[i]}_generic`)) * (1 - BROKEN_WEIGHT * broken(i))))
+  const said = (conversation ?? []).filter((p) => p.author.startsWith('you')).map((p) => p.text.replace(/ \[drafts you rejected: .*\]$/, ''))
+  return drafts.map((d, i) => {
+    const rating = adjust(d, question, v(ids[i]) * (1 - GENERIC_WEIGHT * v(`${ids[i]}_generic`)) * (1 - BROKEN_WEIGHT * broken(i)))
+    return said.some((s) => repeats(d, s)) ? rating * REPEAT_PENALTY : rating
+  })
 }
 const BROKEN = process.env.JEV_BROKEN === 'on'
 const BROKEN_FLOOR = 0.35
 const BROKEN_WEIGHT = 0.6
 const wordsOfDraft = (d: string) => forRating(d).split(/\s+/).filter((w) => /[a-z0-9]/i.test(w))
 
+// A draft that mostly repeats one of JT's own earlier replies in the thread ("that's not
+// wikipedia" three times running) is marked down like an echo of the question.
+const REPEAT_PENALTY = 0.3
+export const repeats = (draft: string, earlier: string) => {
+  const a = new Set(wordsOf(draft))
+  const b = new Set(wordsOf(earlier))
+  if (!a.size || !b.size) return false
+  const shared = [...a].filter((w) => b.has(w)).length
+  return shared / new Set([...a, ...b]).size >= 0.7
+}
 export const echoes = (draft: string, question: string) => {
   const asked = new Set(wordsOf(question))
   return wordsOf(draft).every((w) => asked.has(w) || asked.has(w.replace(/s$/, '')) || asked.has(`${w}s`))
