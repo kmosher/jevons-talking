@@ -22,9 +22,10 @@ import { gunzipSync } from 'node:zlib'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { choice, noul, TypeSafeClient } from '@typesafe-ai/sdk'
+import { thesaurus } from './wordnet.ts'
 import { chunkOf, dasherMenu } from './dasher.ts'
 
-export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number }
+export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number; fix?: number }
 export type Talk = { question: string; answer: string; finished: boolean; steps: Step[] }
 export type Post = { author: string; text: string }
 type Options = { keyboard?: Keyboard; mode?: Mode; phrases?: number; conversation?: Post[]; extraInstructions?: string; prefill?: string[]; extraWords?: string[]; minWordsToSpeak?: number; confirmSpeak?: boolean; maxRejections?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
@@ -346,6 +347,8 @@ export type Branch = {
   undo: { from: string; option: string }[]
   rejected: Map<string, Set<string>>
   steps: Step[]
+  // A word Jev said it would replace if it could: the next menu offers swaps for it.
+  swap?: { idx: number; word: string }
   rejections: number
   score: number
 }
@@ -418,6 +421,8 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   }
   // Any letter or digit, like a real keyboard, so Jev can spell words the predictor doesn't know.
   const letters = 'abcdefghijklmnopqrstuvwxyz0123456789'
+  // Replacements for a word Jev just flagged, from the thesaurus (rewrite-as-you-type).
+  if (b.swap && !prefix) for (const w of thesaurus(b.swap.word, SWAPS)) menu[`swap: ${w}`] ??= `replace "${b.swap.word}" with "${w}"`
   // Words from the conversation the predictor doesn't know (names, jargon), offered once they match.
   for (const w of o.extra ?? []) if (w.startsWith(prefix)) menu[`word: ${w}`] ??= `append "${w}" (from the conversation)`
   // A lone letter is only a word if it's "a", "i" or a digit; otherwise committing it leaves a
@@ -430,11 +435,22 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   if (prefix || words.length > b.locked) menu.backspace = prefix ? `delete the typed letter "${prefix.at(-1)}"` : `delete "${words.at(-1)}"`
   if (words.filter((w) => /\w/.test(w)).length >= o.minWordsToSpeak && !prefix) menu[SPEAK] = 'finish and speak the text aloud'
   for (const opt of b.rejected.get(branchKey(b)) ?? []) delete menu[opt]
+  // Jev takes at most 255 options; the lowest-ranked predictions make room for swaps and thread words.
+  const over = Object.keys(menu).length - MAX_OPTIONS
+  if (over > 0) for (const w of predicted.slice(-over).reverse()) delete menu[`word: ${w}`]
   return menu
 }
+const MAX_OPTIONS = 255
 
 // Applies a non-SPEAK pick to the branch.
 export function applyPick(b: Branch, pick: string) {
+  const swap = b.swap
+  b.swap = undefined
+  if (pick.startsWith('swap: ') && swap) {
+    b.undo.push({ from: branchKey(b), option: pick })
+    b.words[swap.idx] = pick.slice(6)
+    return
+  }
   if (pick === 'backspace') {
     const last = b.undo.pop()
     if (last) reject(b, last.from, last.option)
@@ -470,6 +486,26 @@ export function applyPick(b: Branch, pick: string) {
   } else b.words.push(pick)
 }
 
+// Rewrite-as-you-type: each pick call also asks whether Jev would replace the last word; a "yes"
+// puts thesaurus swaps for it on the next menu. JEV_SWAP=off disables it.
+export const SWAP = process.env.JEV_SWAP !== 'off'
+export const SWAPS = 20
+export const SWAP_BAR = 0.6
+// Function words ("i", "is", "can") get flagged at about the base rate and have no useful synonyms.
+const FUNCTION_WORDS = new Set('i me my you your he she it its we they them a an the is am are was were be been being do does did have has had can could will would shall should may might must not no and or but if so to of in on at by for with from as that this these those there here what which who how why when where'.split(' '))
+// The last word, if it's one that could be swapped: a plain word past any prefilled verdict.
+export function swappable(b: Branch): { idx: number; word: string } | undefined {
+  if (!SWAP || b.prefix || b.swap) return undefined
+  const idx = b.words.length - 1
+  const word = b.words[idx]
+  return idx >= b.locked && word && /^[a-z][a-z'-]*$/i.test(word) && !FUNCTION_WORDS.has(word.toLowerCase()) && b.steps.at(-1)?.pick.startsWith('swap: ') !== true ? { idx, word } : undefined
+}
+export const fixQuestion = (word: string) => noul(`Would you replace the last word of text_so_far ("${word}") with a better word, if you could?`)
+// After a pick, flag the word for swapping if Jev wanted it replaced and it is still there.
+export function flagSwap(b: Branch, target: { idx: number; word: string } | undefined, p: number | undefined) {
+  if (target && p !== undefined && p >= SWAP_BAR && b.words[target.idx] === target.word) b.swap = target
+}
+
 export const recentActions = (b: Branch) => {
   const recent = b.steps.slice(-HISTORY).map((s) => s.pick)
   return recent.length ? recent : '(none)'
@@ -483,14 +519,16 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
   for (let step = 0; step < maxSteps; step++) {
     const menu = menuFor(b, { words: nWords, common, minWordsToSpeak: minWordsToSpeak + prefill.length, phrases, keyboard, extra: extraWords })
     const state = { instructions: extraInstructions ? `${instructionsFor(mode, keyboard)}\n${extraInstructions}` : instructionsFor(mode, keyboard), ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recentActions(b), text_so_far: branchText(b) || '(nothing yet)', letters_typed: b.prefix || '(none)' }
-    const questions = { next: choice('Which menu option do you pick next?', menu) }
+    const target = swappable(b)
+    const questions = { next: choice('Which menu option do you pick next?', menu), ...(target ? { fix: fixQuestion(target.word) } : {}) }
     if (dryRun) {
       console.log(JSON.stringify({ state, questions }, null, 2))
       break
     }
     const r = await client.systemOne({ state, questions })
     const a = r.answers.next as { choice: string; confidence: number; probabilities: Record<string, number> }
-    b.steps.push({ menu: Object.keys(menu), pick: a.choice, confidence: a.confidence, probabilities: a.probabilities })
+    const fix = target ? (r.answers.fix as { noul: number }).noul : undefined
+    b.steps.push({ menu: Object.keys(menu), pick: a.choice, confidence: a.confidence, probabilities: a.probabilities, ...(fix !== undefined ? { fix } : {}) })
     log(`${String(step + 1).padStart(2)} ${a.choice.padEnd(16)} conf=${a.confidence.toFixed(2)}  | ${branchText(b)}${b.prefix ? ' ' + b.prefix + '…' : ''}`)
 
     if (isSpeak(a.choice)) {
@@ -509,6 +547,8 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
       continue
     }
     applyPick(b, a.choice)
+    flagSwap(b, target, fix)
+    if (b.swap) log(`   would replace "${b.swap.word}" (${((fix ?? 0) * 100).toFixed(0)}%)`)
   }
   const last = b.steps.at(-1)
   return { question, answer: branchText(b), finished: !!last && isSpeak(last.pick) && (last.final ?? 1) >= 0.5, steps: b.steps }

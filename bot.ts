@@ -97,9 +97,11 @@ await loadCaptioner().then(
 )
 
 // --- Formatting ----------------------------------------------------------------
-function headline(t: Talk): string {
+// The reply's text: just the answer when the trace image carries the stats, else with them.
+function headline(t: Talk, withStats = true): string {
   if (containsBlocked(t.answer)) return '(Jev composed something I won’t post.)'
   const answer = t.answer || '…'
+  if (!withStats) return answer
   const calls = (t as Partial<BeamTalk>).calls
   const tail = `${t.steps.length} picks · ${calls ? `${calls} Jev calls · ` : ''}mean confidence ${meanConfidence(t).toFixed(2)}${t.finished ? '' : ' · ran out of picks'}`
   return `${answer}\n\n${tail}`
@@ -297,7 +299,7 @@ async function replyTo(n: Incoming, record: { reply?: { root: Ref; parent: Ref }
     const asker = view ? await asContext(view) : { author: `@${n.author.handle}`, text: question }
     const t = await answer(question, [...thread, ...linked, asker])
     const image = containsBlocked(t.answer) ? undefined : await traceImage(t, full)
-    const last = await post(headline(t), root, parent, image)
+    const last = await post(headline(t, !image), root, parent, image)
     if (!image) {
       let prev = last
       for (const chunk of traceChunks(t, POST_LIMIT)) prev = await post(chunk, root, prev)

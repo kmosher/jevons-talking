@@ -24,7 +24,7 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…`
 // Rough advance width; good enough for sizing chips.
 const textWidth = (s: string, size: number) => [...s].reduce((w, ch) => w + (/[A-Z]/.test(ch) ? 0.72 : 0.56), 0) * size
 
-const label = (option: string) => (option === 'backspace' ? '⌫ delete' : isSpeak(option) ? 'SPEAK' : isSpace(option) ? 'SPACE' : option.replace(/^(word|letter|key): /, ''))
+const label = (option: string) => (option === 'backspace' ? '⌫ delete' : isSpeak(option) ? 'SPEAK' : isSpace(option) ? 'SPACE' : option.startsWith('swap: ') ? `↻ ${option.slice(6)}` : option.replace(/^(word|letter|key): /, ''))
 // A SPEAK that Jev then said wasn't final.
 const withdrawn = (step: Step) => isSpeak(step.pick) && step.final !== undefined && step.final < 0.5
 const kind = (option: string) =>
@@ -225,7 +225,7 @@ export const pickLabel = (step: Step) =>
         : step.pick.replace(/^(word|letter|key): /, '')
 
 // The trace image's alt text: what was decided before writing, the drafts and how a fresh Jev
-// rated them, then every key pressed with its confidence, cut to fit. The "Rejected drafts:"
+// rated them, then every key pressed, cut to fit. The drafts
 // line is read back (rejectedDrafts) when JT's own post turns up in a later thread.
 const ALT_LIMIT = 1900
 const altPct = (p: number) => `${Math.round(p * 100)}%`
@@ -245,17 +245,16 @@ export function altText(t: Talk): string {
   }
   const judged = Object.entries(h.judged ?? {}).sort((a, b) => b[1] - a[1])
   if (judged.length > 1) {
-    lines.push(`Path: ${h.path === 'beam' ? 'beam search' : 'single draft'}. Drafts as a fresh Jev rated them: ${judged.map(([a, r]) => `"${a}" ${altPct(r)}`).join(', ')}.`)
-    const rejected = judged.filter(([a]) => a.toLowerCase() !== t.answer.toLowerCase()).slice(0, 3)
-    if (rejected.length) lines.push(`Rejected drafts: ${rejected.map(([a]) => `"${a}"`).join(' | ')}`)
+    const chosen = (a: string) => a.toLowerCase() === t.answer.toLowerCase()
+    lines.push(`${h.path === 'beam' ? 'Beam search' : 'Single draft'}. ${DRAFTS_LABEL} ${judged.map(([a, r]) => `"${a}" ${altPct(r)}${chosen(a) ? ' (chosen)' : ''}`).join(', ')}.`)
   } else if (h.path) lines.push(`Path: single draft, rated ${judged[0] ? altPct(judged[0][1]) : 'n/a'} by a fresh Jev.`)
   if (h.rewrite?.kept === 'after') lines.push(`Rewritten after: ${h.rewrite.edits.map((e) => `${e.from} → ${e.to || '(deleted)'}`).join(', ')}.`)
   if (h.case && h.case.case !== 'lower') lines.push(`Jev chose ${h.case.case === 'shout' ? 'ALL CAPS' : 'sentence case'} (${altPct(h.case.confidence)}).`)
   lines.push(`${t.steps.length} picks, ${h.calls ?? '?'} Jev calls, mean confidence ${meanConfidence(t).toFixed(2)}.`)
   let alt = lines.join('\n')
-  let keys = '\nKeys pressed (confidence):'
+  let keys = '\nKeys pressed:'
   for (const s of t.steps) {
-    const k = ` ${pickLabel(s)} ${altPct(s.confidence)},`
+    const k = ` ${pickLabel(s)},`
     if (alt.length + keys.length + k.length > ALT_LIMIT - 4) {
       keys += ' …'
       break
@@ -264,6 +263,8 @@ export function altText(t: Talk): string {
   }
   return (alt + keys.replace(/,$/, '.')).slice(0, ALT_LIMIT)
 }
-// The drafts JT passed over, from the alt text of its own trace image.
-export const rejectedDrafts = (alt?: string) => [...(alt?.match(/^Rejected drafts: (.*)$/m)?.[1].matchAll(/"([^"]*)"/g) ?? [])].map((m) => m[1])
+// The drafts JT passed over, read back from the alt text of its own trace image.
+const DRAFTS_LABEL = 'Drafts, as a fresh Jev rated them:'
+export const rejectedDrafts = (alt?: string) =>
+  [...(alt?.split('\n').find((l) => l.includes(DRAFTS_LABEL))?.matchAll(/"([^"]*)" \d+%( \(chosen\))?/g) ?? [])].filter((m) => !m[2]).map((m) => m[1]).slice(0, 3)
 

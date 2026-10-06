@@ -25,6 +25,8 @@ import {
   newBranch,
   isBare,
   isSpeak,
+  swappable,
+  flagSwap,
   type Post,
   type Step,
   recentActions,
@@ -183,10 +185,17 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
     const branchState = Object.fromEntries(
       live.map((b, i) => [ids[i], { text_so_far: branchText(b) || '(nothing yet)', letters_typed: b.prefix || '(none)', recent_actions: recentActions(b) }]),
     )
-    const branchQuestions = Object.fromEntries(ids.map((id, i) => [id, choice(`Which menu option do you pick next for branch \`${id}\`?`, menus[i])]))
+    const targets = live.map(swappable)
+    const branchQuestions = Object.fromEntries(
+      ids.flatMap((id, i) => [
+        [id, choice(`Which menu option do you pick next for branch \`${id}\`?`, menus[i])],
+        ...(targets[i] ? [[`${id}_fix`, noul(`For branch \`${id}\`: would you replace the last word of its text_so_far ("${targets[i]!.word}") with a better word, if you could?`)]] : []),
+      ]),
+    )
     const raw = await ask(branchQuestions, branchState, unrated())
     if (!raw) break
     const answers = raw as Record<string, { choice: string; confidence: number; probabilities: Record<string, number> }>
+    const fixes = raw as Record<string, { noul?: number }>
 
     const children: Branch[] = []
     live.forEach((b, i) => {
@@ -204,11 +213,13 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
       for (const pick of picks) {
         const child = cloneBranch(b)
         const p = a.probabilities[pick] ?? a.confidence
-        child.steps.push({ menu: Object.keys(menus[i]), pick, confidence: p, probabilities: a.probabilities })
+        const fix = fixes[`${ids[i]}_fix`]?.noul
+        child.steps.push({ menu: Object.keys(menus[i]), pick, confidence: p, probabilities: a.probabilities, ...(fix !== undefined ? { fix } : {}) })
         child.score *= p
         if (isSpeak(pick)) finished.push(child)
         else {
           applyPick(child, pick)
+          flagSwap(child, targets[i], fix)
           children.push(child)
         }
       }

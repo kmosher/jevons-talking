@@ -39,6 +39,23 @@ const POS_OF: Record<string, (typeof POS)[number]> = { n: 'noun', v: 'verb', a: 
 // Plain inflections to look up when the word itself isn't a WordNet lemma.
 const lemmas = (w: string) => [w, w.replace(/ies$/, 'y'), w.replace(/es$/, ''), w.replace(/s$/, ''), w.replace(/ed$/, ''), w.replace(/ed$/, 'e'), w.replace(/ing$/, ''), w.replace(/ing$/, 'e')]
 
+// The Moby Thesaurus (public domain, ~30k roots), when JEV_MOBY points at mthesaur.txt. Its
+// lists are long and alphabetical, so mutual synonyms (each lists the other) come first.
+let moby: Map<string, string[]> | undefined
+function mobyFor(w: string): string[] {
+  if (!process.env.JEV_MOBY) return []
+  if (!moby) {
+    moby = new Map()
+    for (const line of readFileSync(process.env.JEV_MOBY, 'utf8').split(/\r?\n/)) {
+      const [root, ...syns] = line.split(',')
+      if (root) moby.set(root.toLowerCase(), syns.map((x) => x.toLowerCase()))
+    }
+  }
+  const syns = moby.get(w) ?? []
+  const mutual = syns.filter((x) => moby!.get(x)?.includes(w))
+  return [...mutual, ...syns.filter((x) => !mutual.includes(x))]
+}
+
 // Single-word alternatives for `word`, synonyms first; at most `n`.
 export function thesaurus(word: string, n = 40): string[] {
   if (!index) loadIndex()
@@ -53,7 +70,10 @@ export function thesaurus(word: string, n = 40): string[] {
       for (const p of s.pointers)
         if (p.sym === '&' || p.sym === '@') (p.sym === '&' ? near : broader).push(...synset(POS_OF[p.pos], p.offset).words)
     }
-  return [...new Set([...near, ...broader].map((x) => x.toLowerCase()).filter((x) => /^[a-z'-]+$/.test(x) && x !== w))].slice(0, n)
+  const mobySyns = lemmas(w).flatMap(mobyFor)
+  // Interleave WordNet's near synonyms with Moby's, then the broader terms.
+  const mixed = Array.from({ length: Math.max(near.length, mobySyns.length) }, (_, i) => [near[i], mobySyns[i]]).flat().filter(Boolean) as string[]
+  return [...new Set([...mixed, ...broader].map((x) => x.toLowerCase()).filter((x) => /^[a-z'-]+$/.test(x) && x !== w))].slice(0, n)
 }
 
 if (import.meta.main) for (const w of process.argv.slice(2)) console.log(w, '→', thesaurus(w).join(', '))
