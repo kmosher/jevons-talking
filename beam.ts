@@ -100,6 +100,7 @@ export async function rateDrafts(question: string, drafts: string[], conversatio
       ids.flatMap((id) => [
         [id, noul(`Is candidate \`${id}\` ${MODES[mode].judge}?`)],
         [`${id}_generic`, noul(`Is candidate \`${id}\` generic: a reply that could answer almost any message?`)],
+        ...(COMPLETE ? [[`${id}_complete`, noul(`Is candidate \`${id}\` a complete thought, rather than cut off mid-sentence?`)] as const] : []),
         ...(BROKEN ? wordsOfDraft(drafts[ids.indexOf(id)]).map((w, j) => [`${id}_w${j}`, noul(`Would you replace word ${j + 1} of candidate \`${id}\` ("${w}") with a better word, if you could?`)] as const) : []),
       ]),
     ),
@@ -113,11 +114,16 @@ export async function rateDrafts(question: string, drafts: string[], conversatio
     BROKEN ? Math.max(0, ...wordsOfDraft(drafts[i]).map((_, j) => (v(`${ids[i]}_w${j}`) - BROKEN_FLOOR) / (1 - BROKEN_FLOOR))) : 0
   const said = (conversation ?? []).filter((p) => p.author.startsWith('you')).map((p) => p.text)
   return drafts.map((d, i) => {
-    const rating = adjust(d, question, v(ids[i]) * (1 - GENERIC_WEIGHT * v(`${ids[i]}_generic`)) * (1 - BROKEN_WEIGHT * broken(i)))
+    const complete = COMPLETE ? v(`${ids[i]}_complete`) : 1
+    const rating = adjust(d, question, v(ids[i]) * (1 - GENERIC_WEIGHT * v(`${ids[i]}_generic`)) * (1 - BROKEN_WEIGHT * broken(i)) * (1 - CUT_OFF_WEIGHT * (1 - complete)))
     return said.some((s) => repeats(d, s)) ? rating * REPEAT_PENALTY : rating
   })
 }
 const BROKEN = process.env.JEV_BROKEN === 'on'
+// A fragment like "you're" or "i am not" is marked down by how sure Jev is that it's cut off
+// (JEV_COMPLETE=off skips the question): it won "good effort, JT" over "you are excellent".
+const COMPLETE = process.env.JEV_COMPLETE !== 'off'
+const CUT_OFF_WEIGHT = 1
 const BROKEN_FLOOR = 0.35
 const BROKEN_WEIGHT = 0.6
 const wordsOfDraft = (d: string) => forRating(d).split(/\s+/).filter((w) => /[a-z0-9]/i.test(w))
