@@ -25,7 +25,7 @@ import { choice, noul, TypeSafeClient } from '@typesafe-ai/sdk'
 import { thesaurus } from './wordnet.ts'
 import { chunkOf, dasherMenu } from './dasher.ts'
 
-export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number; fix?: number }
+export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number; fix?: number; cased?: string }
 export type Talk = { question: string; answer: string; finished: boolean; steps: Step[] }
 // A context entry. Images (descriptions plus alt text) and JT's rejected drafts ride in their
 // own fields, not inside the text, so Jev can tell what was said from what was seen or tried.
@@ -376,6 +376,8 @@ export type Branch = {
   swap?: { idx: number; word: string; kinds: SwapKind[] }
   // Words Jev said it would replace, with how strongly (JEV_BEAM_FLAG ranks branches by them).
   flaws?: { idx: number; word: string; p: number }[]
+  // The word whose casing Jev was last asked about (JEV_WORD_CASE).
+  caseAsked?: number
   rejections: number
   score: number
 }
@@ -430,7 +432,7 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   const { words, prefix } = b
   // A phrase is stored as one entry; predictions follow its last word.
   // After a punctuation-only word (or nothing), predictions start afresh, as at a sentence start.
-  const prev = words.length && /[a-z0-9]/i.test(words.at(-1)!) ? words.at(-1)!.split(' ').at(-1)!.replace(/[^a-z0-9']+$/i, '') : START
+  const prev = words.length && /[a-z0-9]/i.test(words.at(-1)!) ? words.at(-1)!.split(' ').at(-1)!.replace(/[^a-z0-9']+$/i, '').toLowerCase() : START
   const menu: Record<string, string> = {}
   const keyboard = o.keyboard ?? DEFAULT_KEYBOARD
   const predicted = predict(prev, prefix, o.words, o.common, keyboard)
@@ -562,6 +564,29 @@ export const flawFactor = (b: Branch) => {
   const worst = Math.max(0, ...(b.flaws ?? []).filter((f) => b.words[f.idx] === f.word).map((f) => f.p))
   return 1 - FLAW_WEIGHT * Math.max(0, (worst - FLAW_FLOOR) / (1 - FLAW_FLOOR))
 }
+// With JEV_WORD_CASE=on, each pick call also asks how the last word should be written (as is,
+// Capitalized or ALL CAPS) and applies the answer at once, in place of one choice for the
+// whole reply at the end.
+export const WORD_CASE = process.env.JEV_WORD_CASE === 'on'
+const WORD_CASES = { as_is: (w: string) => w, capitalized: (w: string) => w[0].toUpperCase() + w.slice(1), all_caps: (w: string) => w.toUpperCase() }
+export function caseTarget(b: Branch): { idx: number; word: string } | undefined {
+  if (!WORD_CASE || b.prefix) return undefined
+  const idx = b.words.length - 1
+  const word = b.words[idx]
+  return idx >= b.locked && word && /^[a-z][a-z'-]*$/i.test(word) && b.caseAsked !== idx ? { idx, word } : undefined
+}
+export const caseQuestion = (word: string, about = 'the last word of text_so_far') =>
+  choice(`How should ${about} be written?`, Object.fromEntries(Object.entries(WORD_CASES).map(([k, f]) => [k, `"${f(word)}"`])))
+export function applyCase(b: Branch, target: { idx: number; word: string } | undefined, answer: { choice: string } | undefined): string | undefined {
+  if (!target || !answer) return undefined
+  if (b.words[target.idx] !== target.word) return undefined
+  b.caseAsked = target.idx
+  const f = WORD_CASES[answer.choice as keyof typeof WORD_CASES]
+  if (!f || answer.choice === 'as_is') return undefined
+  b.words[target.idx] = f(target.word)
+  return answer.choice
+}
+
 // One question ("replace the last word?") or, with JEV_SWAP_SPLIT=on, one per kind of edit: its
 // form (tense, person, number) and a synonym. Keys are suffixes on the caller's prefix.
 export type SwapKind = 'form' | 'syn'
@@ -649,7 +674,8 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
     const menu = menuFor(b, { words: nWords, common, minWordsToSpeak: minWordsToSpeak + prefill.length, phrases, keyboard, extra: extraWords })
     const state = { instructions: extraInstructions ? `${instructionsFor(mode, keyboard)}\n${extraInstructions}` : instructionsFor(mode, keyboard), ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recentActions(b), ...typingState(b, maxSteps) }
     const target = swappable(b)
-    const questions = { next: choice('Which menu option do you pick next?', menu), ...(target ? fixQuestions(target.word) : {}) }
+    const caseT = caseTarget(b)
+    const questions = { next: choice('Which menu option do you pick next?', menu), ...(target ? fixQuestions(target.word) : {}), ...(caseT ? { case: caseQuestion(caseT.word) } : {}) }
     if (dryRun) {
       console.log(JSON.stringify({ state, questions }, null, 2))
       break
@@ -678,6 +704,11 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
       continue
     }
     applyPick(b, a.choice)
+    const cased = applyCase(b, caseT, (r.answers as Record<string, unknown>).case as { choice: string } | undefined)
+    if (cased) {
+      b.steps.at(-1)!.cased = cased
+      log(`   cased "${caseT!.word}" ${cased}`)
+    }
     flagSwap(b, target, fixes)
     if (b.swap) log(`   would change "${b.swap.word}" (${b.swap.kinds.join('+')}; ${Object.entries(fixes).map(([k, v]) => `${k} ${((v ?? 0) * 100).toFixed(0)}%`).join(', ')})`)
     if (await resolveSwaps([b], { question, conversation })) log(`   swap: ${b.steps.at(-1)!.pick.startsWith('swap: ') ? b.steps.at(-1)!.pick : 'kept'}`)

@@ -33,6 +33,9 @@ import {
   BEAM_FLAG,
   flawFactor,
   lastWord,
+  caseTarget,
+  caseQuestion,
+  applyCase,
   type Post,
   type Step,
   recentActions,
@@ -192,10 +195,12 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
       live.map((b, i) => [ids[i], { ...typingState(b, maxSteps), recent_actions: recentActions(b) }]),
     )
     const targets = live.map((b) => swappable(b) ?? (BEAM_FLAG ? lastWord(b) : undefined))
+    const caseTargets = live.map(caseTarget)
     const branchQuestions = Object.fromEntries(
       ids.flatMap((id, i) => [
         [id, choice(`Which menu option do you pick next for branch \`${id}\`?`, menus[i])],
         ...(targets[i] ? Object.entries(fixQuestions(targets[i]!.word, `the last word of branch \`${id}\`'s text_so_far`)).map(([k, q]) => [`${id}_${k}`, q]) : []),
+        ...(caseTargets[i] ? [[`${id}_case`, caseQuestion(caseTargets[i]!.word, `the last word of branch \`${id}\`'s text_so_far ("${caseTargets[i]!.word}")`)]] : []),
       ]),
     )
     const raw = await ask(branchQuestions, branchState, unrated())
@@ -226,6 +231,8 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
         if (isSpeak(pick)) finished.push(child)
         else {
           applyPick(child, pick)
+          const cased = applyCase(child, caseTargets[i], (raw as Record<string, { choice: string }>)[`${ids[i]}_case`])
+          if (cased) child.steps.at(-1)!.cased = cased
           flagSwap(child, targets[i], own)
           if (BEAM_FLAG && targets[i] && fix !== undefined) child.flaws = [...(child.flaws ?? []), { ...targets[i]!, p: fix }]
           children.push(child)

@@ -34,7 +34,7 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
     })
     if (rw) t = { ...t, rewrite: rw, answer: rw.kept === 'after' ? rw.after : t.answer, calls: t.calls + rw.calls }
   }
-  if (process.env.JEV_CASE !== 'off' && /[a-z]/.test(t.answer)) {
+  if (process.env.JEV_CASE !== 'off' && process.env.JEV_WORD_CASE !== 'on' && /[a-z]/.test(t.answer)) {
     const c = await chooseCase(question, t.answer, opts.conversation)
     opts.log?.(`case: ${c.case} (${(c.confidence * 100).toFixed(0)}%)`)
     t = { ...t, case: c, answer: CASES[c.case](t.answer), calls: t.calls + 1 }
