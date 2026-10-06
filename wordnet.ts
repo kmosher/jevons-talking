@@ -1,6 +1,7 @@
 // A thesaurus from WordNet's own files (the wordnet-db package): a word's synonyms, plus the
 // "similar to" adjectives and the broader terms (hypernyms) of each of its senses.
-import { closeSync, openSync, readFileSync, readSync } from 'node:fs'
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { gunzipSync } from 'node:zlib'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
@@ -40,25 +41,71 @@ const POS_OF: Record<string, (typeof POS)[number]> = { n: 'noun', v: 'verb', a: 
 // Plain inflections to look up when the word itself isn't a WordNet lemma.
 const lemmas = (w: string) => [w, w.replace(/ies$/, 'y'), w.replace(/es$/, ''), w.replace(/s$/, ''), w.replace(/ed$/, ''), w.replace(/ed$/, 'e'), w.replace(/ing$/, ''), w.replace(/ing$/, 'e')]
 
-// The Moby Thesaurus (public domain, ~30k roots, Project Gutenberg #3202), shipped gzipped in
-// data/; JEV_MOBY=off leaves it out, or a path points at another copy. Its lists are long and
-// alphabetical, so mutual synonyms (each lists the other) come first.
-// Entries stay as raw lines (split on lookup): splitting all 2.5M synonyms up front took ~320MB.
-let moby: Map<string, string> | undefined
-const mobyList = (w: string) => moby!.get(w)?.split(',') ?? []
-function mobyFor(w: string): string[] {
-  if (process.env.JEV_MOBY === 'off') return []
-  if (!moby) {
-    moby = new Map()
-    const src = process.env.JEV_MOBY ?? new URL('data/mthesaur.txt.gz', import.meta.url).pathname
-    const raw = readFileSync(src)
-    for (const line of (src.endsWith('.gz') ? gunzipSync(raw) : raw).toString('utf8').toLowerCase().split(/\r?\n/)) {
-      const comma = line.indexOf(',')
-      if (comma > 0) moby.set(line.slice(0, comma), line.slice(comma + 1))
+// The Moby Thesaurus (public domain, ~30k roots, Project Gutenberg #3202), shipped in data/ as
+// one "root,syn,syn,…" line per root, lowercased and byte-sorted. It is unzipped once to a cache
+// file and binary-searched on disk like look(1), so nothing stays in memory. JEV_MOBY=off leaves
+// it out. Its lists are alphabetical, so mutual synonyms (each lists the other) come first.
+const MOBY_GZ = new URL('data/mthesaur.txt.gz', import.meta.url).pathname
+let mobyFd: number | undefined
+let mobySize = 0
+function openMoby(): number {
+  if (mobyFd !== undefined) return mobyFd
+  const cache = join(process.env.JEV_CACHE ?? tmpdir(), `jevons-talking-mthesaur-${statSync(MOBY_GZ).size}.txt`)
+  if (!existsSync(cache)) {
+    const part = `${cache}.${process.pid}`
+    writeFileSync(part, gunzipSync(readFileSync(MOBY_GZ)))
+    renameSync(part, cache)
+  }
+  mobyFd = openSync(cache, 'r')
+  mobySize = fstatSync(mobyFd).size
+  return mobyFd
+}
+// The first whole line starting at or after byte `pos`.
+function lineFrom(pos: number): string | undefined {
+  const fd = openMoby()
+  let start = pos
+  if (pos > 0) {
+    const buf = Buffer.alloc(256)
+    for (let at = pos - 1; ; at += buf.length) {
+      const n = readSync(fd, buf, 0, buf.length, at)
+      if (n <= 0) return undefined
+      const nl = buf.subarray(0, n).indexOf(10)
+      if (nl >= 0) {
+        start = at + nl + 1
+        break
+      }
     }
   }
+  if (start >= mobySize) return undefined
+  const parts: Buffer[] = []
+  for (let at = start; at < mobySize; ) {
+    const buf = Buffer.alloc(8192)
+    const n = readSync(fd, buf, 0, buf.length, at)
+    const nl = buf.subarray(0, n).indexOf(10)
+    parts.push(buf.subarray(0, nl >= 0 ? nl : n))
+    if (nl >= 0 || n <= 0) break
+    at += n
+  }
+  return Buffer.concat(parts).toString('utf8')
+}
+const rootOf = (line: string) => line.slice(0, line.indexOf(','))
+function mobyList(w: string): string[] {
+  openMoby()
+  let lo = 0
+  let hi = mobySize
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2)
+    const line = lineFrom(mid)
+    if (line === undefined || rootOf(line) >= w) hi = mid
+    else lo = mid + 1
+  }
+  const line = lineFrom(lo)
+  return line !== undefined && rootOf(line) === w ? line.slice(w.length + 1).split(',') : []
+}
+function mobyFor(w: string): string[] {
+  if (process.env.JEV_MOBY === 'off') return []
   const syns = mobyList(w)
-  const mutual = syns.filter((x) => moby!.get(x)?.split(',').includes(w))
+  const mutual = syns.slice(0, 60).filter((x) => mobyList(x).includes(w))
   return [...mutual, ...syns.filter((x) => !mutual.includes(x))]
 }
 
