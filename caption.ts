@@ -6,13 +6,16 @@
 // competing for the CPU.
 //
 // Env: JEV_CAPTION_MODEL (default onnx-community/Florence-2-base-ft), JEV_CAPTION_DTYPE (default
-// fp32), JEV_CAPTION_DEVICE (default cpu), JEV_MODEL_CACHE (where weights are downloaded to).
+// DEFAULT_DTYPE), JEV_CAPTION_DEVICE (default cpu), JEV_MODEL_CACHE (where weights are downloaded to).
 // Usage: node --import tsx caption.ts <image-url>...
 import { AutoProcessor, env, Florence2ForConditionalGeneration, RawImage } from '@huggingface/transformers'
 
 const MODEL = process.env.JEV_CAPTION_MODEL ?? 'onnx-community/Florence-2-base-ft'
-// A dtype name, or JSON mapping each ONNX module to one (e.g. {"decoder_model_merged":"fp32",...}).
-const DTYPE_ENV = process.env.JEV_CAPTION_DTYPE ?? 'fp32'
+// Only the decoder is quantized: it's most of the generation time, and q8 there reads text as
+// well as fp32 does. A quantized vision encoder or encoder garbles OCR (99% read as 69%).
+const DEFAULT_DTYPE = { vision_encoder: 'fp32', encoder_model: 'fp32', embed_tokens: 'fp32', decoder_model_merged: 'q8' }
+// A dtype name, or JSON mapping each ONNX module to one.
+const DTYPE_ENV = process.env.JEV_CAPTION_DTYPE ?? JSON.stringify(DEFAULT_DTYPE)
 const DTYPE = DTYPE_ENV.startsWith('{') ? JSON.parse(DTYPE_ENV) : DTYPE_ENV
 const DEVICE = process.env.JEV_CAPTION_DEVICE ?? 'cpu'
 if (process.env.JEV_MODEL_CACHE) env.cacheDir = process.env.JEV_MODEL_CACHE
