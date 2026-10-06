@@ -15,7 +15,7 @@
 // Usage: npm run bot
 import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { AppBskyFeedDefs, AtpAgent, RichText } from '@atproto/api'
@@ -417,16 +417,84 @@ async function pollDms() {
   }
 }
 
-// --- Loop ----------------------------------------------------------------------
-for (;;) {
-  for (const [name, poll] of [['mentions', pollMentions], ['dms', pollDms]] as const) {
-    try {
-      await poll()
-    } catch (e) {
-      log(`${name} poll failed:`, e instanceof Error ? e.message : e)
+// --- Lease -----------------------------------------------------------------------
+// Only one running copy may answer, or every question gets two replies. The copy that holds a
+// lease record in JT's own repo answers; others wait and take over once it lapses. The PDS's
+// swapRecord makes taking and renewing it a compare-and-swap, so two copies can't both win.
+// --force (or JEV_FORCE_LEASE=1) takes it regardless, for when the old copy is known dead.
+const LEASE = { repo: agent.session!.did, collection: 'dev.kmosher.jt.lease', rkey: 'self' }
+const LEASE_TTL_MS = 5 * 60_000
+const LEASE_RENEW_MS = 2 * 60_000
+const STANDBY_CHECK_MS = 30_000
+const INSTANCE = process.env.JEV_INSTANCE ?? `${hostname()}:${process.pid}`
+let force = process.argv.includes('--force') || process.env.JEV_FORCE_LEASE === '1'
+let leaseUntil = 0
+let lastRenew = 0
+type Lease = { instance: string; expiresAt: string }
+
+async function holdLease(): Promise<boolean> {
+  const now = Date.now()
+  if (now < leaseUntil && now - lastRenew < LEASE_RENEW_MS) return true
+  // A standby checks the lease every half minute, not every poll.
+  if (!leaseUntil && lastRenew && !force && now - lastRenew < STANDBY_CHECK_MS) return false
+  let current: { cid?: string; value?: Lease } = {}
+  try {
+    current = (await agent.com.atproto.repo.getRecord(LEASE)).data as unknown as typeof current
+  } catch (e) {
+    if (!/not found|could not locate/i.test(String((e as Error).message))) {
+      log('lease read failed:', (e as Error).message)
+      return now < leaseUntil
     }
   }
-  if (firstRun) log('first run: marked existing mentions and DMs as handled')
-  firstRun = false
+  const mine = current.value?.instance === INSTANCE
+  const live = current.value && Date.parse(current.value.expiresAt) > now
+  if (live && !mine && !force) {
+    if (leaseUntil) log(`lease lost to ${current.value!.instance}; standing by`)
+    else if (!lastRenew) log(`lease held by ${current.value!.instance} until ${current.value!.expiresAt}; standing by`)
+    leaseUntil = 0
+    lastRenew = now
+    return false
+  }
+  const record = { $type: LEASE.collection, instance: INSTANCE, expiresAt: new Date(now + LEASE_TTL_MS).toISOString() }
+  try {
+    if (current.cid) await agent.com.atproto.repo.putRecord({ ...LEASE, record, swapRecord: current.cid })
+    else await agent.com.atproto.repo.createRecord({ ...LEASE, record })
+  } catch (e) {
+    log('lease write failed:', (e as Error).message)
+    leaseUntil = 0
+    lastRenew = now
+    return false
+  }
+  if (!mine) log(`lease taken by ${INSTANCE}${force && live ? ` (forced from ${current.value!.instance})` : ''}`)
+  force = false
+  leaseUntil = now + LEASE_TTL_MS
+  lastRenew = now
+  return true
+}
+
+// Hand the lease back on shutdown, so a replacement can start at once.
+for (const sig of ['SIGINT', 'SIGTERM'] as const)
+  process.once(sig, async () => {
+    if (leaseUntil > Date.now())
+      await agent.com.atproto.repo.getRecord(LEASE).then(({ data }) =>
+        (data.value as Lease).instance === INSTANCE ? agent.com.atproto.repo.deleteRecord({ ...LEASE, swapRecord: data.cid }) : undefined,
+      ).catch(() => {})
+    log(`stopping (${sig})`)
+    process.exit(0)
+  })
+
+// --- Loop ----------------------------------------------------------------------
+for (;;) {
+  if (await holdLease()) {
+    for (const [name, poll] of [['mentions', pollMentions], ['dms', pollDms]] as const) {
+      try {
+        await poll()
+      } catch (e) {
+        log(`${name} poll failed:`, e instanceof Error ? e.message : e)
+      }
+    }
+    if (firstRun) log('first run: marked existing mentions and DMs as handled')
+    firstRun = false
+  }
   await new Promise((r) => setTimeout(r, POLL_MS))
 }
