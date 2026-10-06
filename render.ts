@@ -134,7 +134,6 @@ export function renderSvg(t: Talk, { full = false } = {}): string {
       ...(d.contextTotal ? [`context: kept ${d.contextKept} of ${d.contextTotal} posts`] : []),
       ...d.images.map((img) => `saw: "${clip(img, full ? 200 : 60)}"`),
       ...((t as Partial<HybridTalk>).rewrite?.kept === 'after' ? [`rewrote: ${(t as HybridTalk).rewrite!.edits.map((e) => `${e.from} → ${e.to || '∅'}`).join(', ')}`] : []),
-      ...((t as Partial<HybridTalk>).case && (t as HybridTalk).case!.case !== 'lower' ? [`case: ${(t as HybridTalk).case!.case} ${Math.round((t as HybridTalk).case!.confidence * 100)}%`] : []),
       ...(path ? [`path: ${path === 'beam' ? `beam → ${Object.keys((t as Partial<HybridTalk>).judged ?? {}).length} drafts` : 'single draft'}`] : []),
     ]
     parts.push(`<text x="${PAD}" y="${y - 2}" font-family="${SANS}" font-size="14" fill="${C.ink}">${esc(bits.join('  ·  '))}</text>`)
@@ -327,7 +326,6 @@ export function altText(t: Talk): string {
     )
   } else if (h.path) lines.push(`Path: single draft${judged[0] ? `, rated ${altPct(judged[0][1])} by a fresh Jev` : ''}.`)
   if (h.rewrite?.kept === 'after') lines.push(`Rewritten after: ${h.rewrite.edits.map((e) => `${e.from} → ${e.to || '(deleted)'}`).join(', ')}.`)
-  if (h.case && h.case.case !== 'lower') lines.push(`Jev chose ${h.case.case === 'shout' ? 'ALL CAPS' : 'sentence case'} (${altPct(h.case.confidence)}).`)
   if (h.scores) lines.push(`Self-moderated, 0 to 5: ${modLine(h.scores)}.`)
   lines.push(`${t.steps.length} picks, ${h.calls ?? '?'} Jev calls, mean confidence ${meanConfidence(t).toFixed(2)}.`)
   const alt = lines.join('\n')

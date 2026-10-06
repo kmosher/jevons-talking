@@ -6,7 +6,7 @@
 // Usage: npm run -s talk:hybrid -- [--q="..."] [--good=0.35]
 import { type BeamTalk, beam, rateDrafts } from './beam.ts'
 import { type Rewrite, rewrite } from './rewrite.ts'
-import { SPEAK_GATE, type Case, CASES, chooseCase, classify, moderate, type Scores, isBare, unfamiliarWords, usefulWords, verdict, relevantContext, type Keyboard, type Mode, type Post, save, talk } from './talk.ts'
+import { SPEAK_GATE, classify, moderate, type Scores, isBare, unfamiliarWords, usefulWords, verdict, relevantContext, type Keyboard, type Mode, type Post, save, talk } from './talk.ts'
 
 const SINGLE_STEPS = 40
 // The single path's answer is kept if it rates at least this; otherwise the beam runs.
@@ -20,7 +20,7 @@ const BARE_BAR = 0.6
 export type HybridOptions = { keyboard?: Keyboard; keyboardBy?: 'mode' | 'jev'; mode?: Mode; conversation?: Post[]; good?: number; log?: (line: string) => void }
 // What was decided before writing started, for the trace image.
 export type Decisions = { mode: Mode; modeConfidence?: number; verdict?: { yes: number; know?: number; word: string }; contextWords?: { word: string; p: number }[]; contextTotal: number; contextKept: number; dropped: Post[]; images: string[] }
-export type HybridTalk = BeamTalk & { scores?: Scores; rewrite?: Rewrite; case?: { case: Case; confidence: number }; conversation?: Post[]; path: 'single' | 'beam'; mode: Mode; keyboard: Keyboard; decisions: Decisions }
+export type HybridTalk = BeamTalk & { scores?: Scores; rewrite?: Rewrite; conversation?: Post[]; path: 'single' | 'beam'; mode: Mode; keyboard: Keyboard; decisions: Decisions }
 
 export async function hybrid(question: string, opts: HybridOptions = {}): Promise<HybridTalk> {
   let t: HybridTalk = { ...(await compose(question, opts)), conversation: opts.conversation }
@@ -33,11 +33,6 @@ export async function hybrid(question: string, opts: HybridOptions = {}): Promis
       log: opts.log,
     })
     if (rw) t = { ...t, rewrite: rw, answer: rw.kept === 'after' ? rw.after : t.answer, calls: t.calls + rw.calls }
-  }
-  if (process.env.JEV_CASE !== 'off' && process.env.JEV_WORD_CASE === 'off' && /[a-z]/.test(t.answer)) {
-    const c = await chooseCase(question, t.answer, opts.conversation)
-    opts.log?.(`case: ${c.case} (${(c.confidence * 100).toFixed(0)}%)`)
-    t = { ...t, case: c, answer: CASES[c.case](t.answer), calls: t.calls + 1 }
   }
   if (process.env.JEV_MODERATE !== 'off' && t.answer) {
     const scores = await moderate(question, t.answer, opts.conversation)
@@ -64,7 +59,12 @@ async function compose(question: string, opts: HybridOptions = {}): Promise<Hybr
   // First, what kind of reply the message calls for and which keyboard to write it with: by
   // mode (acknowledgements and comebacks on the chat keyboard), or Jev's own choice.
   const keyboardBy = opts.keyboardBy ?? (process.env.JEV_KEYBOARD_BY === 'jev' ? 'jev' : 'mode')
-  const classified = opts.mode ? null : await classify(question, conversation, keyboardBy === 'jev' && process.env.JEV_ROUTING === 'on')
+  // Unfamiliar words from the conversation join the word menu: all of them, or (the default)
+  // only those Jev says it might use. JEV_CONTEXT_WORDS=all|judge|off.
+  const cwMode = process.env.JEV_CONTEXT_WORDS ?? 'judge'
+  const unfamiliar = cwMode === 'off' ? [] : unfamiliarWords([...(conversation ?? []).map((p) => p.text), question])
+  // The mode, verdict and context-word questions share one call (separate calls when the mode is given).
+  const classified = opts.mode ? null : await classify(question, conversation, keyboardBy === 'jev' && process.env.JEV_ROUTING === 'on', cwMode === 'judge' ? unfamiliar : [])
   const mode = opts.mode ?? classified!.mode
   // Everything is written on the words keyboard unless JEV_ROUTING=on (keyboard by mode, or by
   // Jev with JEV_KEYBOARD_BY=jev).
@@ -82,14 +82,10 @@ async function compose(question: string, opts: HybridOptions = {}): Promise<Hybr
       (classified?.keyboardConfidence !== undefined ? ` (Jev's pick, ${(classified.keyboardConfidence * 100).toFixed(0)}%)` : ''),
   )
   // A yes-or-no question gets Jev's verdict first, typed in for it; JT writes only the reason.
-  const v = mode === 'yesno' ? await verdict(question, conversation) : undefined
+  const v = mode !== 'yesno' ? undefined : (classified?.verdict ?? (await verdict(question, conversation)))
   const prefill = v ? [v.word, ','] : []
   if (v) log(`verdict: ${v.word} (yes ${(v.yes * 100).toFixed(0)}%, knows ${(v.know * 100).toFixed(0)}%)`)
-  // Unfamiliar words from the conversation join the word menu: all of them, or (the default)
-  // only those Jev says it might use. JEV_CONTEXT_WORDS=all|judge|off.
-  const cwMode = process.env.JEV_CONTEXT_WORDS ?? 'judge'
-  const unfamiliar = cwMode === 'off' ? [] : unfamiliarWords([...(conversation ?? []).map((p) => p.text), question])
-  const contextWords = cwMode === 'judge' ? await usefulWords(question, conversation, unfamiliar) : unfamiliar.map((word) => ({ word, p: 1 }))
+  const contextWords = cwMode !== 'judge' ? unfamiliar.map((word) => ({ word, p: 1 })) : classified ? classified.contextWords : await usefulWords(question, conversation, unfamiliar)
   const extraWords = contextWords.filter((w) => w.p >= 0.5).map((w) => w.word)
   if (unfamiliar.length) log(`context words: ${contextWords.map((w) => `${w.word} ${(w.p * 100).toFixed(0)}%`).join(', ')}`)
   // The single path gets fewer steps: if it hasn't finished by then, the beam is the better bet.
@@ -111,7 +107,7 @@ async function compose(question: string, opts: HybridOptions = {}): Promise<Hybr
   const rating = single.answer ? ratings[pick] : 0
   // One call per pick and per final-answer check, plus the rating calls and the classification.
   const singleCalls =
-    drafts.reduce((n, d) => n + d.t.steps.length + d.t.steps.filter((s) => s.final !== undefined).length + d.t.steps.filter((s) => s.complete !== undefined).length, 0) + drafts.length + (classified ? 1 : 0) + (v ? 1 : 0) + (cwMode === 'judge' && unfamiliar.length ? 1 : 0) + filterCalls
+    drafts.reduce((n, d) => n + d.t.steps.length + d.t.steps.filter((s) => s.final !== undefined).length + d.t.steps.filter((s) => s.complete !== undefined).length, 0) + drafts.length + (classified ? 1 : (v ? 1 : 0) + (cwMode === 'judge' && unfamiliar.length ? 1 : 0)) + filterCalls
   log(`single path: "${single.answer}" (${chosenKeyboard}) rated ${(rating * 100).toFixed(0)}% in ${singleCalls} calls`)
   // The question itself is the last conversation entry, so it isn't counted as context.
   const decisions: Decisions = {

@@ -15,6 +15,7 @@
 // removed from that menu, so a stateless Jev can't loop on the same dead end.
 //
 // Usage: npm run talk -- [--q="What is a black hole?"] [--max-steps=100] [--words=150] [--common=30] [--dry-run]
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -298,16 +299,20 @@ two-letter pair), and words starting with what you've typed appear to pick from.
 export const instructionsFor = (mode: Mode = 'answer', keyboard: Keyboard = DEFAULT_KEYBOARD) =>
   `${instructions}\n${DASHER ? `${DASHER_NOTE}\n` : keyboard === 'letters' ? `${LETTERS_NOTE}\n` : ''}${MODES[mode].instruction}`
 
-// One choice call: which kind of reply the message calls for.
-// One choice call: which kind of reply the message calls for and, with chooseKeyboard, which
-// keyboard Jev wants to write it with.
-export async function classify(
-  question: string,
-  conversation?: Post[],
-  chooseKeyboard = false,
-): Promise<{ mode: Mode; confidence: number; keyboard?: Keyboard; keyboardConfidence?: number }> {
+// One call before writing: which kind of reply the message calls for (and, with chooseKeyboard,
+// which keyboard Jev wants), plus the verdict and context-word questions, asked up front so they
+// don't cost calls of their own. The verdict is only used if the mode turns out to be yesno.
+export type Prepared = {
+  mode: Mode
+  confidence: number
+  keyboard?: Keyboard
+  keyboardConfidence?: number
+  verdict: { yes: number; know: number; word: string }
+  contextWords: { word: string; p: number }[]
+}
+export async function classify(question: string, conversation?: Post[], chooseKeyboard = false, words: string[] = []): Promise<Prepared> {
   const r = await jev().systemOne({
-    state: { you: 'Jev, called JT on Bluesky', ...(conversation?.length ? { conversation_so_far: conversation } : {}), message: question },
+    state: { you: 'Jev, called JT on Bluesky', ...(conversation?.length ? { conversation_so_far: conversation } : {}), message: question, ...(words.length ? { words } : {}) },
     questions: {
       mode: choice(
         'What kind of reply does the message call for?',
@@ -321,11 +326,20 @@ export async function classify(
             ),
           }
         : {}),
+      ...VERDICT_QUESTIONS,
+      ...wordQuestions(words),
     },
   })
   const a = r.answers.mode as { choice: Mode; confidence: number }
   const k = r.answers.keyboard as { choice: Keyboard; confidence: number } | undefined
-  return { mode: a.choice, confidence: a.confidence, keyboard: k?.choice, keyboardConfidence: k?.confidence }
+  return {
+    mode: a.choice,
+    confidence: a.confidence,
+    keyboard: k?.choice,
+    keyboardConfidence: k?.confidence,
+    verdict: readVerdict(r.answers),
+    contextWords: readWords(r.answers, words),
+  }
 }
 // Drops thread posts Jev rates irrelevant to the latest message, so stray topics (a horse joke five
 // posts up) don't leak into its word choices. Always kept: the latest message, the post it replies
@@ -381,10 +395,30 @@ function newClient(): TypeSafeClient {
     })
     return Promise.race([call(...args), deadline]).finally(() => clearTimeout(timer))
   }
-  c.systemOne = ((...args: Parameters<typeof call>) => once(...args).catch(() => once(...args))) as typeof c.systemOne
+  const retried = (...args: Parameters<typeof call>) => once(...args).catch(() => once(...args))
+  c.systemOne = (CACHE_DIR ? cached(retried) : retried) as typeof c.systemOne
   return c
 }
 export const jev = () => (client ??= newClient())
+// Record and replay (JEV_CACHE=<dir>, for experiments): each answer is saved under a hash of the
+// exact request, so a repeat run, or a variant that only changes a late stage, pays only for the
+// requests that differ. Two variants also see the same answers up to where they diverge.
+const CACHE_DIR = process.env.JEV_CACHE
+export const cacheStats = { hits: 0, misses: 0 }
+function cached<A extends unknown[], R>(call: (...args: A) => Promise<R>): (...args: A) => Promise<R> {
+  mkdirSync(CACHE_DIR!, { recursive: true })
+  return async (...args) => {
+    const file = join(CACHE_DIR!, `${createHash('sha256').update(JSON.stringify(args)).digest('hex')}.json`)
+    if (existsSync(file)) {
+      cacheStats.hits++
+      return JSON.parse(readFileSync(file, 'utf8')) as R
+    }
+    cacheStats.misses++
+    const r = await call(...args)
+    writeFileSync(file, JSON.stringify(r))
+    return r
+  }
+}
 
 // One draft in progress: its text, the letters typed toward the next word, and what it has rejected.
 export type Branch = {
@@ -793,14 +827,6 @@ export function save(t: Talk): string {
 // A bare yes or no ("no", "no.", "no. no", "not"): allowed, but it has to clear a higher bar to win.
 export const isBare = (text: string) => /^\s*((yes|yep|yeah|no|nope|not|maybe|idk)[\s.,?!]*)+$/i.test(text)
 
-// Jev picks how its finished reply is capitalized, seeing each version: all lowercase (the
-// keyboard's natural output), sentence case, or ALL CAPS. JEV_CASE=off keeps lowercase.
-export const CASES = {
-  lower: (t: string) => t,
-  sentence: (t: string) => t.replace(/\bi\b/g, 'I').replace(/(^|[.!?…]\s+)([a-z])/g, (_, p, c) => p + c.toUpperCase()),
-  shout: (t: string) => t.toUpperCase(),
-} as const
-export type Case = keyof typeof CASES
 // Slashdot-style self-moderation: a fresh Jev scores the finished reply 0-5 on each rubric.
 // JEV_MODERATE=off skips it; JEV_MODERATE=every also scores the text so far on every pick.
 export const RUBRICS = ['funny', 'insightful', 'informative', 'interesting'] as const
@@ -825,15 +851,6 @@ export async function moderate(question: string, answer: string, conversation?: 
 }
 export const MODERATE_EVERY = process.env.JEV_MODERATE === 'every'
 
-export async function chooseCase(question: string, answer: string, conversation?: Post[]): Promise<{ case: Case; confidence: number }> {
-  const r = await jev().systemOne({
-    state: { you: 'Jev, called JT on Bluesky', ...(conversation?.length ? { conversation_so_far: conversation } : {}), message: question, your_reply: answer },
-    questions: { case: choice('How do you want your reply capitalized?', Object.fromEntries(Object.entries(CASES).map(([k, f]) => [k, `"${f(answer)}"`]))) },
-  })
-  const a = r.answers.case as { choice: Case; confidence: number }
-  return { case: a.choice, confidence: a.confidence }
-}
-
 // Words in the conversation the predictor has never seen ("femshep", a name, a coinage), so Jev
 // can pick them whole instead of spelling them. With judge, Jev keeps only the ones it might use.
 export const MAX_CONTEXT_WORDS = 30
@@ -846,13 +863,15 @@ export function unfamiliarWords(texts: string[]): string[] {
     }
   return [...seen].slice(0, MAX_CONTEXT_WORDS)
 }
+const wordQuestions = (words: string[]) => Object.fromEntries(words.map((w, i) => [`w${i}`, noul(`Might you use the word "${w}" in your reply to the message?`)]))
+const readWords = (answers: Record<string, unknown>, words: string[]) => words.map((word, i) => ({ word, p: (answers[`w${i}`] as { noul: number }).noul }))
 export async function usefulWords(question: string, conversation: Post[] | undefined, words: string[]): Promise<{ word: string; p: number }[]> {
   if (!words.length) return []
   const r = await jev().systemOne({
     state: { you: 'Jev, called JT on Bluesky', ...(conversation?.length ? { conversation_so_far: conversation } : {}), message: question, words },
-    questions: Object.fromEntries(words.map((w, i) => [`w${i}`, noul(`Might you use the word "${w}" in your reply to the message?`)])),
+    questions: wordQuestions(words),
   })
-  return words.map((word, i) => ({ word, p: (r.answers[`w${i}`] as { noul: number }).noul }))
+  return readWords(r.answers, words)
 }
 
 // Jev's own verdict on a yes-or-no question, as the probability of yes. Asked fresh, without the
@@ -861,17 +880,21 @@ export const UNSURE = 0.1
 // "maybe" is for a real toss-up; "idk" is for a question Jev says it doesn't know the answer to,
 // which a probability near 50% alone can't tell apart.
 export const IDK = 0.35
+const VERDICT_QUESTIONS = {
+  yes: noul('Is the answer to the yes-or-no question in the message yes?'),
+  know: noul('Do you actually know the answer to the yes-or-no question in the message?'),
+}
+function readVerdict(answers: Record<string, unknown>): { yes: number; know: number; word: string } {
+  const yes = (answers.yes as { noul: number }).noul
+  const know = (answers.know as { noul: number }).noul
+  return { yes, know, word: know < IDK ? 'idk' : Math.abs(yes - 0.5) < UNSURE ? 'maybe' : yes >= 0.5 ? 'yes' : 'no' }
+}
 export async function verdict(question: string, conversation?: Post[]): Promise<{ yes: number; know: number; word: string }> {
   const r = await jev().systemOne({
     state: { you: 'Jev, called JT on Bluesky', ...(conversation?.length ? { conversation_so_far: conversation } : {}), message: question },
-    questions: {
-      yes: noul('Is the answer to the yes-or-no question in the message yes?'),
-      know: noul('Do you actually know the answer to the yes-or-no question in the message?'),
-    },
+    questions: VERDICT_QUESTIONS,
   })
-  const yes = (r.answers.yes as { noul: number }).noul
-  const know = (r.answers.know as { noul: number }).noul
-  return { yes, know, word: know < IDK ? 'idk' : Math.abs(yes - 0.5) < UNSURE ? 'maybe' : yes >= 0.5 ? 'yes' : 'no' }
+  return readVerdict(r.answers)
 }
 
 export const meanConfidence = (t: Talk) => t.steps.reduce((x, s) => x + s.confidence, 0) / (t.steps.length || 1)
