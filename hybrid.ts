@@ -109,7 +109,7 @@ async function compose(question: string, opts: HybridOptions = {}): Promise<Hybr
   const rating = single.answer ? ratings[pick] : 0
   // One call per pick and per final-answer check, plus the rating calls and the classification.
   const singleCalls =
-    drafts.reduce((n, d) => n + d.t.steps.length + d.t.steps.filter((s) => s.final !== undefined).length + d.t.steps.filter((s) => s.complete !== undefined).length, 0) + drafts.length + (classified ? 1 : (v ? 1 : 0) + (cwMode === 'judge' && unfamiliar.length ? 1 : 0)) + filterCalls
+    drafts.reduce((n, d) => n + d.t.steps.length + d.t.steps.filter((s) => s.final !== undefined).length + d.t.steps.filter((s) => s.complete !== undefined).length + d.t.steps.filter((s) => s.pruned !== undefined).length, 0) + drafts.length + (classified ? 1 : (v ? 1 : 0) + (cwMode === 'judge' && unfamiliar.length ? 1 : 0)) + filterCalls
   log(`single path: "${single.answer}" (${chosenKeyboard}) rated ${(rating * 100).toFixed(0)}% in ${singleCalls} calls`)
   // The question itself is the last conversation entry, so it isn't counted as context.
   const decisions: Decisions = {

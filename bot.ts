@@ -292,14 +292,14 @@ async function creditsRetries(): Promise<Incoming[]> {
   for (const item of data.feed) {
     const record = item.post.record as { text?: string; reply?: { parent: Ref } }
     const age = Date.now() - Date.parse(item.post.indexedAt)
-    if (item.post.author.did !== me || record.text !== CREDITS_REPLY || !record.reply || age < CREDITS_RETRY_AFTER || age > 7 * 86_400_000) continue
+    if (item.post.author.did !== me || !isCreditsNotice(record.text) || !record.reply || age < CREDITS_RETRY_AFTER || age > 7 * 86_400_000) continue
     const t: unknown = (await agent.getPostThread({ uri: record.reply.parent.uri, depth: 1, parentHeight: 0 }).catch(() => undefined))?.data.thread
     await agent.deletePost(item.post.uri)
     if (!AppBskyFeedDefs.isThreadViewPost(t)) continue
     const p = (t as AppBskyFeedDefs.ThreadViewPost).post
     // Already answered since (a later retry got through): just the notice goes.
     const answered = ((t as AppBskyFeedDefs.ThreadViewPost).replies ?? []).some(
-      (r) => AppBskyFeedDefs.isThreadViewPost(r) && r.post.author.did === me && (r.post.record as { text?: string }).text !== CREDITS_REPLY,
+      (r) => AppBskyFeedDefs.isThreadViewPost(r) && r.post.author.did === me && !isCreditsNotice((r.post.record as { text?: string }).text),
     )
     if (answered) continue
     handled.delete(p.uri)
@@ -314,7 +314,9 @@ const failures = new Map<string, number>()
 const inFlight = new Set<string>()
 const MAX_TRIES = 3
 const ERROR_REPLY = 'Something broke while I was typing, sorry. Try me again later?'
-const CREDITS_REPLY = 'I’m out of Jev credits, so I can’t pick any words right now. Try again later.'
+const CREDITS_REPLY = 'I’m out of Jev credits, so I can’t pick any words right now. I will replace this with a reply later.'
+// Notices to retry: the current wording and the one before it.
+const isCreditsNotice = (text?: string) => text === CREDITS_REPLY || text === 'I’m out of Jev credits, so I can’t pick any words right now. Try again later.'
 // Jev refusing for want of credits (402, or a quota/credit message) won't fix itself on retry.
 const outOfCredits = (e: unknown) => {
   const status = (e as { status?: number }).status

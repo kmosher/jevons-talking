@@ -26,7 +26,7 @@ import { choice, noul, score, TypeSafeClient } from '@typesafe-ai/sdk'
 import { thesaurus } from './wordnet.ts'
 import { chunkOf, dasherMenu } from './dasher.ts'
 
-export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number; fix?: number; cased?: string; scores?: Scores; complete?: number }
+export type Step = { menu: string[]; pick: string; confidence: number; probabilities: Record<string, number>; final?: number; fix?: number; cased?: string; scores?: Scores; complete?: number; stuck?: number; pruned?: number }
 export type Talk = { question: string; answer: string; finished: boolean; steps: Step[] }
 // A context entry. Images (descriptions plus alt text) and JT's rejected drafts ride in their
 // own fields, not inside the text, so Jev can tell what was said from what was seen or tried.
@@ -433,6 +433,8 @@ export type Branch = {
   // A word Jev said it would replace if it could: the next menu offers swaps for it.
   // How many times a short draft's SPEAK was checked for completeness (JEV_SPEAK_GATE).
   gateChecks?: number
+  // Jev said it was stuck and the draft ended there (JEV_STUCK).
+  stopped?: boolean
   swap?: { idx: number; word: string; kinds: SwapKind[] }
   // Words Jev said it would replace, with how strongly (JEV_BEAM_FLAG ranks branches by them).
   flaws?: { idx: number; word: string; p: number }[]
@@ -481,6 +483,7 @@ export const branchKey = (b: Branch) => `${b.words.join(' ')}|${b.prefix}`
 // ("... --- ...").
 export const branchText = (b: Branch) =>
   b.words.reduce((text, w, i) => (i > 0 && /^[.,!?;:…)\]}%'"]+$/.test(w) && /[a-z0-9]$/i.test(b.words[i - 1]) ? text + w : text ? `${text} ${w}` : w), '')
+const joinWords = (words: string[]) => branchText({ words } as Branch)
 const reject = (b: Branch, key: string, option: string) => b.rejected.set(key, (b.rejected.get(key) ?? new Set()).add(option))
 
 export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
@@ -729,6 +732,33 @@ export function typingState(b: Branch, maxSteps: number): Record<string, string 
 export const SPEAK_GATE = process.env.JEV_SPEAK_GATE !== 'off'
 const SHORT_REPLY = 4
 const MAX_GATE_CHECKS = 3
+// JEV_STUCK=on asks, in each pick call from STUCK_AFTER picks on, whether Jev is stuck going in
+// circles. A yes ends the draft where it stands (pruned, with JEV_PRUNE=on), and lets a short
+// fragment through the SPEAK gate.
+const STUCK_CHECK = process.env.JEV_STUCK === 'on'
+const STUCK_AFTER = 8
+// JEV_PRUNE=on: a draft that ends without SPEAK (stuck, or out of picks) is offered back with its
+// last 0 to PRUNE_MAX words cut, and Jev picks which to send, so a run that trails off into word
+// salad can fall back to where it still made sense. One call.
+const PRUNE = process.env.JEV_PRUNE === 'on'
+const PRUNE_MAX = 5
+async function prune(b: Branch, question: string, conversation: Post[] | undefined, log: (l: string) => void): Promise<number> {
+  const cuttable = b.words.length - Math.max(b.locked, 1)
+  const versions = Array.from({ length: Math.min(PRUNE_MAX, cuttable) + 1 }, (_, k) => b.words.slice(0, b.words.length - k))
+  if (versions.length < 2) return 0
+  const options = Object.fromEntries(versions.map((w, k) => [`cut_${k}`, `"${joinWords(w)}"`]))
+  const r = await jev().systemOne({
+    state: { ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, note: 'You ran out of picks before finishing your reply. You can send it as it stands, or cut words off the end.' },
+    questions: { send: choice('Which version of your reply do you send?', options) },
+  })
+  const k = Number((r.answers.send as { choice: string }).choice.slice(4))
+  if (k) {
+    log(`   pruned ${k} word(s): "${joinWords(b.words)}" -> "${joinWords(b.words.slice(0, -k))}"`)
+    b.words = b.words.slice(0, -k)
+    b.prefix = ''
+  }
+  return k
+}
 
 export const recentActions = (b: Branch) => {
   const recent = b.steps.slice(-HISTORY).map((s) => shown(s.pick))
@@ -746,7 +776,7 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
     const target = swappable(b)
     const caseT = caseTarget(b)
     const shownMenu = presentMenu(menu)
-    const questions = { next: choice('Which menu option do you pick next?', shownMenu.menu), ...(target ? fixQuestions(target.word) : {}), ...(caseT ? { case: caseQuestion(caseT.word) } : {}), ...(MODERATE_EVERY && b.words.length ? rubricQuestions('text_so_far, as your reply so far') : {}) }
+    const questions = { next: choice('Which menu option do you pick next?', shownMenu.menu), ...(target ? fixQuestions(target.word) : {}), ...(caseT ? { case: caseQuestion(caseT.word) } : {}), ...(MODERATE_EVERY && b.words.length ? rubricQuestions('text_so_far, as your reply so far') : {}), ...(STUCK_CHECK && b.steps.length >= STUCK_AFTER ? { stuck: noul('Looking at recent_actions and text_so_far, are you stuck going in circles, so it would be better to stop and send what you have?') } : {}) }
     if (dryRun) {
       console.log(JSON.stringify({ state, questions }, null, 2))
       break
@@ -757,7 +787,7 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
     const fixVals = Object.values(fixes)
     const fix = fixVals.length ? Math.max(...fixVals) : undefined
     const stepScores = MODERATE_EVERY ? readScores(r.answers as Record<string, unknown>) : undefined
-    b.steps.push({ menu: Object.keys(menu), pick: a.choice, confidence: a.confidence, probabilities: a.probabilities, ...(fix !== undefined ? { fix } : {}), ...(stepScores ? { scores: stepScores } : {}) })
+    b.steps.push({ menu: Object.keys(menu), pick: a.choice, confidence: a.confidence, probabilities: a.probabilities, ...(fix !== undefined ? { fix } : {}), ...(stepScores ? { scores: stepScores } : {}), ...('stuck' in r.answers ? { stuck: (r.answers.stuck as { noul: number }).noul } : {}) })
     log(`${String(step + 1).padStart(2)} ${a.choice.padEnd(16)} conf=${a.confidence.toFixed(2)}  | ${branchText(b)}${b.prefix ? ` ${b.prefix}…` : ''}`)
 
     // The last word's casing is answered in the same call as SPEAK, so apply it before stopping.
@@ -770,7 +800,8 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
       // A short draft may only stop if Jev says it's a complete thought; otherwise the pick becomes
       // the best other option from the same call (no re-ask), and SPEAK is barred at this text.
       const shortReply = b.words.filter((w) => /\w/.test(w)).length <= SHORT_REPLY
-      if (SPEAK_GATE && shortReply && (b.gateChecks ?? 0) < MAX_GATE_CHECKS) {
+      const stuck = (b.steps.at(-1)!.stuck ?? 0) >= 0.5
+      if (SPEAK_GATE && shortReply && !stuck && (b.gateChecks ?? 0) < MAX_GATE_CHECKS) {
         b.gateChecks = (b.gateChecks ?? 0) + 1
         const g = await client.systemOne({
           state: { ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, reply: branchText(b) },
@@ -803,6 +834,11 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
       if (b.rejections >= maxRejections) for (const set of b.rejected.values()) set.delete(SPEAK)
       continue
     }
+    if ((b.steps.at(-1)!.stuck ?? 0) >= 0.5 && b.words.length > b.locked) {
+      log(`   stuck (${((b.steps.at(-1)!.stuck ?? 0) * 100).toFixed(0)}%); stopping here`)
+      b.stopped = true
+      break
+    }
     applyPick(b, a.choice)
     const cased = applyCase(b, caseT, (r.answers as Record<string, unknown>).case as { choice: string } | undefined)
     if (cased) {
@@ -814,7 +850,13 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
     if (await resolveSwaps([b], { question, conversation })) log(`   swap: ${b.steps.at(-1)!.pick.startsWith('swap: ') ? b.steps.at(-1)!.pick : 'kept'}`)
   }
   const last = b.steps.at(-1)
-  return { question, answer: branchText(b), finished: !!last && isSpeak(last.pick) && (last.final ?? 1) >= 0.5, steps: b.steps }
+  const spoke = !!last && isSpeak(last.pick) && (last.final ?? 1) >= 0.5
+  if (PRUNE && !spoke && last && !dryRun) {
+    const k = await prune(b, question, conversation, log)
+    last.pruned = k
+  }
+  // A stuck stop counts as finished: Jev chose to end there.
+  return { question, answer: branchText(b), finished: spoke || !!b.stopped, steps: b.steps }
 }
 
 export function save(t: Talk): string {
