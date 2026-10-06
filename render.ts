@@ -142,7 +142,7 @@ export function renderSvg(t: Talk, { full = false } = {}): string {
     parts.push(`<text x="${PAD}" y="${y + 4}" font-family="${SANS}" font-size="12" font-weight="700" fill="${C.muted}" letter-spacing="1">DRAFTS · RATED AS A FINAL ANSWER</text>`)
     y += 26
     for (const [draft, p] of Object.entries(judged).sort((a, b) => b[1] - a[1])) {
-      const won = draft === t.answer
+      const won = isChosen(t, draft)
       parts.push(`<rect x="${PAD}" y="${y - 10}" width="120" height="12" rx="3" fill="${C.chip}"/>`)
       parts.push(`<rect x="${PAD}" y="${y - 10}" width="${Math.max(3, 120 * p)}" height="12" rx="3" fill="${won ? C.orange : C.muted}"/>`)
       parts.push(`<text x="${PAD + 130}" y="${y + 1}" font-family="${SANS}" font-size="14" font-weight="${won ? 700 : 400}" fill="${C.ink}">${Math.round(p * 100)}%  ${esc(clip(draft, 90))}${won ? '  ✓' : ''}</text>`)
@@ -214,6 +214,10 @@ if (import.meta.main) {
   console.log(`wrote ${out} (${(png.length / 1024).toFixed(0)} KB)`)
 }
 
+// Whether `draft` is the one that became the answer: the answer may since have been rewritten
+// or recased, so compare against the text before the rewrite, ignoring case.
+const isChosen = (t: Talk, draft: string) => draft.toLowerCase() === ((t as Partial<HybridTalk>).rewrite?.before ?? t.answer).toLowerCase()
+
 // --- Alt text ------------------------------------------------------------------
 export const pickLabel = (step: Step) =>
   step.pick === 'backspace'
@@ -244,7 +248,7 @@ export function altText(t: Talk): string {
     lines.push(before.filter(Boolean).join(' '))
   }
   const judged = Object.entries(h.judged ?? {}).sort((a, b) => b[1] - a[1])
-  const chosen = judged.find(([a]) => a.toLowerCase() === t.answer.toLowerCase())
+  const chosen = judged.find(([a]) => isChosen(t, a))
   if (h.path === 'beam') {
     const rejected = judged.filter((j) => j !== chosen)
     lines.push(
