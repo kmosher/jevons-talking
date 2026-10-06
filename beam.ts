@@ -180,6 +180,10 @@ function trims(b: Branch): Branch[] {
   })
 }
 
+// JEV_BEAM_JUDGE=full: the in-search judge marks drafts down for being generic, cut off or a
+// repeat, as the final judge does, so a trimmed draft can beat the salad it was cut from.
+const FULL_JUDGE = process.env.JEV_BEAM_JUDGE === 'full'
+
 function distinctBy<T>(items: T[], key: (t: T) => string): T[] {
   const seen = new Set<string>()
   return items.filter((t) => {
@@ -205,6 +209,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
   let calls = 0
   let topKey = ''
   let stale = 0
+  const said = (conversation ?? []).filter((p) => p.author.startsWith('you')).map((p) => p.text)
 
   // Rates `drafts` alongside the step's menu questions, so rating costs no extra calls.
   const ask = async (branchQuestions: Record<string, ReturnType<typeof choice> | ReturnType<typeof noul>>, branchState: Record<string, ReturnType<typeof typingState> & { recent_actions: string | string[] }> | null, drafts: string[]) => {
@@ -218,7 +223,17 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
     }
     const questions = {
       ...branchQuestions,
-      ...Object.fromEntries(draftIds.map((id) => [id, noul(`Is finished draft \`${id}\` ${MODES[mode].judge}?`)])),
+      ...Object.fromEntries(
+        draftIds.flatMap((id) => [
+          [id, noul(`Is finished draft \`${id}\` ${MODES[mode].judge}?`)],
+          ...(FULL_JUDGE
+            ? [
+                [`${id}_generic`, noul(`Is finished draft \`${id}\` generic: a reply that could answer almost any message?`)],
+                [`${id}_complete`, noul(`Is finished draft \`${id}\` a complete thought, rather than cut off mid-sentence?`)],
+              ]
+            : []),
+        ]),
+      ),
     }
     if (dryRun) {
       console.log(JSON.stringify({ state, questions: Object.fromEntries(Object.entries(questions).slice(0, 1)) }, null, 2))
@@ -226,8 +241,11 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
     }
     const r = await client.systemOne({ state, questions })
     calls++
+    const v = (k: string) => (r.answers[k] as { noul: number }).noul
     drafts.forEach((d, i) => {
-      ratings.set(d, adjust(d, question, (r.answers[draftIds[i]] as { noul: number }).noul))
+      const id = draftIds[i]
+      const rating = adjust(d, question, FULL_JUDGE ? v(id) * (1 - GENERIC_WEIGHT * v(`${id}_generic`)) * (1 - CUT_OFF_WEIGHT * (1 - v(`${id}_complete`))) : v(id))
+      ratings.set(d, FULL_JUDGE && said.some((s) => repeats(d, s)) ? rating * REPEAT_PENALTY : rating)
     })
     return r.answers
   }
