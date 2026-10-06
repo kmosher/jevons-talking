@@ -19,7 +19,7 @@ const BARE_BAR = 0.6
 
 export type HybridOptions = { keyboard?: Keyboard; keyboardBy?: 'mode' | 'jev'; mode?: Mode; conversation?: Post[]; good?: number; log?: (line: string) => void }
 // What was decided before writing started, for the trace image.
-export type Decisions = { mode: Mode; modeConfidence?: number; verdict?: { yes: number; word: string }; contextWords?: { word: string; p: number }[]; contextTotal: number; contextKept: number; dropped: Post[]; images: string[] }
+export type Decisions = { mode: Mode; modeConfidence?: number; verdict?: { yes: number; know?: number; word: string }; contextWords?: { word: string; p: number }[]; contextTotal: number; contextKept: number; dropped: Post[]; images: string[] }
 export type HybridTalk = BeamTalk & { scores?: Scores; rewrite?: Rewrite; case?: { case: Case; confidence: number }; conversation?: Post[]; path: 'single' | 'beam'; mode: Mode; keyboard: Keyboard; decisions: Decisions }
 
 export async function hybrid(question: string, opts: HybridOptions = {}): Promise<HybridTalk> {
@@ -84,7 +84,7 @@ async function compose(question: string, opts: HybridOptions = {}): Promise<Hybr
   // A yes-or-no question gets Jev's verdict first, typed in for it; JT writes only the reason.
   const v = mode === 'yesno' ? await verdict(question, conversation) : undefined
   const prefill = v ? [v.word, ','] : []
-  if (v) log(`verdict: ${v.word} (yes ${(v.yes * 100).toFixed(0)}%)`)
+  if (v) log(`verdict: ${v.word} (yes ${(v.yes * 100).toFixed(0)}%, knows ${(v.know * 100).toFixed(0)}%)`)
   // Unfamiliar words from the conversation join the word menu: all of them, or (the default)
   // only those Jev says it might use. JEV_CONTEXT_WORDS=all|judge|off.
   const cwMode = process.env.JEV_CONTEXT_WORDS ?? 'judge'

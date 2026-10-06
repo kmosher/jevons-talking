@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url'
 import { gunzipSync } from 'node:zlib'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
-import { choice, noul, TypeSafeClient } from '@typesafe-ai/sdk'
+import { choice, noul, score, TypeSafeClient } from '@typesafe-ai/sdk'
 import { thesaurus } from './wordnet.ts'
 import { chunkOf, dasherMenu } from './dasher.ts'
 
@@ -247,6 +247,9 @@ role "linked" marks posts that were linked or quoted; "images" holds description
 
 // What kind of reply a message calls for, chosen by Jev before it writes anything. Each mode
 // sets the last line of the instructions and the wording the judges rate drafts against.
+// Yes/no answers ask for a reason with personality (JEV_YESNO_STYLE=plain: a plain justification);
+// on 10 questions it gave "no, it's a ball" for the flat earth and scored higher in 7.
+const VIVID = process.env.JEV_YESNO_STYLE !== 'plain'
 export const MODES = {
   answer: {
     when: 'it asks a question that can be answered',
@@ -270,8 +273,10 @@ export const MODES = {
   },
   yesno: {
     when: 'it is a yes-or-no question',
-    instruction: `Your verdict on the yes-or-no question is already typed. Justify it in a few words, then pick ${SPEAK}.`,
-    judge: 'a good answer to the yes-or-no question, with a reason',
+    instruction: VIVID
+      ? `Your verdict on the yes-or-no question is already typed. Back it up in a few words with some personality: a vivid comparison, a surprising detail or a joke, then pick ${SPEAK}.`
+      : `Your verdict on the yes-or-no question is already typed. Justify it in a few words, then pick ${SPEAK}.`,
+    judge: VIVID ? 'a good, colorful answer to the yes-or-no question, with a reason' : 'a good answer to the yes-or-no question, with a reason',
   },
   ask: {
     when: 'it asks you to ask something, or the best reply is a question of your own back',
@@ -756,7 +761,7 @@ export function save(t: Talk): string {
 }
 
 // A bare yes or no ("no", "no.", "no. no", "not"): allowed, but it has to clear a higher bar to win.
-export const isBare = (text: string) => /^\s*((yes|yep|yeah|no|nope|not|maybe)[\s.,?!]*)+$/i.test(text)
+export const isBare = (text: string) => /^\s*((yes|yep|yeah|no|nope|not|maybe|idk)[\s.,?!]*)+$/i.test(text)
 
 // Jev picks how its finished reply is capitalized, seeing each version: all lowercase (the
 // keyboard's natural output), sentence case, or ALL CAPS. JEV_CASE=off keeps lowercase.
@@ -770,19 +775,16 @@ export type Case = keyof typeof CASES
 // JEV_MODERATE=off skips it; JEV_MODERATE=every also scores the text so far on every pick.
 export const RUBRICS = ['funny', 'insightful', 'informative', 'interesting'] as const
 export type Scores = Record<(typeof RUBRICS)[number], number>
-const SCORE_OPTIONS = Object.fromEntries([0, 1, 2, 3, 4, 5].map((n) => [String(n), `${n} out of 5`]))
-export const rubricQuestions = (what: string) =>
-  Object.fromEntries(RUBRICS.map((r) => [`score_${r}`, choice(`How ${r} is ${what}, from 0 to 5?`, SCORE_OPTIONS)]))
+// Jev's score questions take a 0-5 rubric and return the expected score.
+const LEVELS = (r: string) => [`not ${r} at all`, `barely ${r}`, `a little ${r}`, `fairly ${r}`, `very ${r}`, `as ${r} as a reply gets`] as const
+export const rubricQuestions = (what: string) => Object.fromEntries(RUBRICS.map((r) => [`score_${r}`, score(`How ${r} is ${what}?`, LEVELS(r))]))
 // Asked plainly, Jev scored nearly everything under 1. Judging as the reply's proud author, by what
 // the keyboard allows, spreads the scores (best rubric averaged 1.0 -> 1.5 on 14 live replies).
 export const MODERATION_NOTE =
   'You wrote this reply yourself, picking one word at a time from a tiny predictive keyboard that cannot write freely. Judge it kindly, as its proud author, by what you managed with that keyboard.'
-// Each score is the expected value over Jev's probabilities, so it isn't stuck on whole numbers.
 export const readScores = (answers: Record<string, unknown>): Scores | undefined => {
   if (!RUBRICS.every((r) => answers[`score_${r}`])) return undefined
-  return Object.fromEntries(
-    RUBRICS.map((r) => [r, Object.entries((answers[`score_${r}`] as { probabilities: Record<string, number> }).probabilities).reduce((s, [k, p]) => s + Number(k) * p, 0)]),
-  ) as Scores
+  return Object.fromEntries(RUBRICS.map((r) => [r, (answers[`score_${r}`] as { score: number }).score])) as Scores
 }
 export async function moderate(question: string, answer: string, conversation?: Post[]): Promise<Scores> {
   const r = await jev().systemOne({
@@ -826,13 +828,20 @@ export async function usefulWords(question: string, conversation: Post[] | undef
 // Jev's own verdict on a yes-or-no question, as the probability of yes. Asked fresh, without the
 // keyboard, so it is the plainest Jev output there is; JT then types the justification.
 export const UNSURE = 0.1
-export async function verdict(question: string, conversation?: Post[]): Promise<{ yes: number; word: string }> {
+// "maybe" is for a real toss-up; "idk" is for a question Jev says it doesn't know the answer to,
+// which a probability near 50% alone can't tell apart.
+export const IDK = 0.35
+export async function verdict(question: string, conversation?: Post[]): Promise<{ yes: number; know: number; word: string }> {
   const r = await jev().systemOne({
     state: { you: 'Jev, called JT on Bluesky', ...(conversation?.length ? { conversation_so_far: conversation } : {}), message: question },
-    questions: { yes: noul('Is the answer to the yes-or-no question in the message yes?') },
+    questions: {
+      yes: noul('Is the answer to the yes-or-no question in the message yes?'),
+      know: noul('Do you actually know the answer to the yes-or-no question in the message?'),
+    },
   })
   const yes = (r.answers.yes as { noul: number }).noul
-  return { yes, word: Math.abs(yes - 0.5) < UNSURE ? 'maybe' : yes >= 0.5 ? 'yes' : 'no' }
+  const know = (r.answers.know as { noul: number }).noul
+  return { yes, know, word: know < IDK ? 'idk' : Math.abs(yes - 0.5) < UNSURE ? 'maybe' : yes >= 0.5 ? 'yes' : 'no' }
 }
 
 export const meanConfidence = (t: Talk) => t.steps.reduce((x, s) => x + s.confidence, 0) / (t.steps.length || 1)

@@ -11,7 +11,8 @@
     "talk:hybrid": "TYPESAFE_API_KEY=\"${TYPESAFE_API_KEY:-$(security find-generic-password -a \"$USER\" -s typesafe-jev -w 2>/dev/null)}\" NODE_USE_ENV_PROXY=1 node --import tsx hybrid.ts",
     "bot": "TYPESAFE_API_KEY=\"${TYPESAFE_API_KEY:-$(security find-generic-password -a \"$USER\" -s typesafe-jev -w 2>/dev/null)}\" BLUESKY_APP_PASSWORD=\"${BLUESKY_APP_PASSWORD:-$(security find-generic-password -a jevons-talking.bsky.social -s bluesky-jevons -w 2>/dev/null)}\" NODE_USE_ENV_PROXY=1 node --import tsx bot.ts",
     "typecheck": "tsc --noEmit -p .",
-    "jt": "TYPESAFE_API_KEY=\"${TYPESAFE_API_KEY:-$(security find-generic-password -a \"$USER\" -s typesafe-jev -w 2>/dev/null)}\" NODE_USE_ENV_PROXY=1 node --import tsx jt.ts"
+    "jt": "TYPESAFE_API_KEY=\"${TYPESAFE_API_KEY:-$(security find-generic-password -a \"$USER\" -s typesafe-jev -w 2>/dev/null)}\" NODE_USE_ENV_PROXY=1 node --import tsx jt.ts",
+    "check": "tsc --noEmit -p . && for f in *.ts docs/*.ts; do node --check \"$f\" || exit 1; done"
   },
   "dependencies": {
     "@atproto/api": "^0.21.0",

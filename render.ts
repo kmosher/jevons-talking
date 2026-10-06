@@ -126,7 +126,7 @@ export function renderSvg(t: Talk, { full = false } = {}): string {
     const path = (t as Partial<HybridTalk>).path
     const bits = [
       `mode: ${d.mode}${d.modeConfidence !== undefined ? ` ${Math.round(d.modeConfidence * 100)}%` : ''}`,
-      ...(d.verdict ? [`verdict: ${d.verdict.word} (yes ${Math.round(d.verdict.yes * 100)}%)`] : []),
+      ...(d.verdict ? [`verdict: ${d.verdict.word} (yes ${Math.round(d.verdict.yes * 100)}%${d.verdict.know !== undefined ? `, knows ${Math.round(d.verdict.know * 100)}%` : ''})`] : []),
       ...(d.contextWords?.some((w) => w.p >= 0.5) ? [`new words: ${d.contextWords.filter((w) => w.p >= 0.5).map((w) => w.word).join(', ')}`] : []),
       ...(d.contextTotal ? [`context: kept ${d.contextKept} of ${d.contextTotal} posts`] : []),
       ...d.images.map((img) => `saw: "${clip(img, full ? 200 : 60)}"`),
@@ -255,7 +255,7 @@ export function altText(t: Talk): string {
   if (d) {
     const before = [
       `Reply type: ${d.mode}${d.modeConfidence !== undefined ? ` (${altPct(d.modeConfidence)})` : ''}.`,
-      d.verdict && `Verdict, asked before typing: ${d.verdict.word} (yes ${altPct(d.verdict.yes)}).`,
+      d.verdict && `Verdict, asked before typing: ${d.verdict.word} (yes ${altPct(d.verdict.yes)}${d.verdict.know !== undefined ? `, knows the answer ${altPct(d.verdict.know)}` : ''}).`,
       d.contextTotal ? `Kept ${d.contextKept} of ${d.contextTotal} thread posts as relevant.` : '',
       d.images.length ? `Saw ${d.images.length === 1 ? 'an image' : `${d.images.length} images`}: ${d.images.map((i) => `"${i.slice(0, 120)}"`).join('; ')}.` : '',
       d.contextWords?.some((w) => w.p >= 0.5) ? `Words added from the thread: ${d.contextWords.filter((w) => w.p >= 0.5).map((w) => w.word).join(', ')}.` : '',
