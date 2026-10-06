@@ -16,7 +16,7 @@ const MAX_ROWS = 60
 const ALTERNATIVES = 4
 const C = { bg: '#f7f4ee', ink: '#1f3a5f', muted: '#8a94a3', orange: '#e8743b', chip: '#dce1e8', line: '#e2ddd2', red: '#c2453d' }
 // resvg only tries the first family in a font-family list, so each environment names its own: the
-// container's Liberation fonts (see the Dockerfile; DejaVu fills in symbols like ⌫ and ✓), else macOS's.
+// container's Liberation fonts (see the Dockerfile; DejaVu fills in symbols like ✓), else macOS's.
 const LIBERATION = existsSync('/usr/share/fonts/truetype/liberation')
 const SANS = LIBERATION ? 'Liberation Sans' : "'Helvetica Neue'"
 const SERIF = LIBERATION ? 'Liberation Serif' : 'Georgia'
@@ -187,7 +187,8 @@ export function renderSvg(t: Talk, { full = false } = {}): string {
     const ink = withdrawn(step) ? C.ink : { word: '#fff', letter: C.orange, backspace: C.red, speak: '#fff' }[k]
     const stroke = k === 'letter' ? C.orange : k === 'backspace' ? C.red : withdrawn(step) ? C.ink : fill
     strip.push(`<rect x="${x}" y="${y}" width="${w}" height="${KEY_H}" rx="6" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`)
-    strip.push(`<text x="${x + w / 2}" y="${y + 18}" font-family="${k === 'letter' ? MONO : SANS}" font-size="16" font-weight="700" fill="${ink}" text-anchor="middle">${esc(text)}</text>`)
+    if (k === 'backspace' && !withdrawn(step)) strip.push(deleteIcon(x + w / 2, y + KEY_H / 2, ink))
+    else strip.push(`<text x="${x + w / 2}" y="${y + 18}" font-family="${k === 'letter' ? MONO : SANS}" font-size="16" font-weight="700" fill="${ink}" text-anchor="middle">${esc(text)}</text>`)
     strip.push(`<rect x="${x}" y="${y + KEY_H + 4}" width="${w}" height="5" rx="2.5" fill="${C.line}"/>`)
     strip.push(`<rect x="${x}" y="${y + KEY_H + 4}" width="${Math.max(2, w * step.confidence)}" height="5" rx="2.5" fill="${C.ink}"/>`)
     x += w + 5
@@ -273,6 +274,19 @@ const modLine = (s: Record<string, number>) =>
     .sort((a, b) => b[1] - a[1])
     .map(([k, v]) => `${k[0].toUpperCase()}${k.slice(1)} ${v.toFixed(1)}`)
     .join(' · ')
+
+// The delete key drawn as a shape (a key pointing left with an x in it), since the ⌫ glyph
+// looks different in every font that has it.
+const deleteIcon = (cx: number, cy: number, color: string) => {
+  const w = 16
+  const h = 10
+  const l = cx - w / 2
+  const t = cy - h / 2
+  const body = `M ${l} ${cy} L ${l + 5} ${t} H ${l + w} V ${t + h} H ${l + 5} Z`
+  const xc = l + 10.5
+  const x = `M ${xc - 2} ${cy - 2} L ${xc + 2} ${cy + 2} M ${xc + 2} ${cy - 2} L ${xc - 2} ${cy + 2}`
+  return `<path d="${body}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linejoin="round"/><path d="${x}" stroke="${color}" stroke-width="1.6" stroke-linecap="round"/>`
+}
 
 // --- Alt text ------------------------------------------------------------------
 export const pickLabel = (step: Step) =>
