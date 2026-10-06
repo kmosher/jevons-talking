@@ -564,10 +564,10 @@ export const flawFactor = (b: Branch) => {
   const worst = Math.max(0, ...(b.flaws ?? []).filter((f) => b.words[f.idx] === f.word).map((f) => f.p))
   return 1 - FLAW_WEIGHT * Math.max(0, (worst - FLAW_FLOOR) / (1 - FLAW_FLOOR))
 }
-// With JEV_WORD_CASE=on, each pick call also asks how the last word should be written (as is,
+// Each pick call also asks (JEV_WORD_CASE=off to stop) how the last word should be written (as is,
 // Capitalized or ALL CAPS) and applies the answer at once, in place of one choice for the
 // whole reply at the end.
-export const WORD_CASE = process.env.JEV_WORD_CASE === 'on'
+export const WORD_CASE = process.env.JEV_WORD_CASE !== 'off'
 const WORD_CASES = { as_is: (w: string) => w, capitalized: (w: string) => w[0].toUpperCase() + w.slice(1), all_caps: (w: string) => w.toUpperCase() }
 export function caseTarget(b: Branch): { idx: number; word: string } | undefined {
   if (!WORD_CASE || b.prefix) return undefined
