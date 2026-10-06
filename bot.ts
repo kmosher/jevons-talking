@@ -380,6 +380,13 @@ async function pollMentions() {
     if (!question) continue
     const parent = { uri: n.uri, cid: n.cid }
     const root = record.reply?.root ?? parent
+    // A thread whose author limits who can reply (and doesn't allow JT) is left alone, with no
+    // like either: Bluesky accepts such a reply but leaves it stranded outside the thread.
+    const [view] = (await agent.getPosts({ uris: [n.uri] }).catch(() => ({ data: { posts: [] } }))).data.posts
+    if (view?.viewer?.replyDisabled) {
+      log(`replies limited by the thread author; skipping @${n.author.handle}`)
+      continue
+    }
     // A retry was already admitted and liked; only a first attempt counts against the limits.
     if (!failures.has(n.uri)) {
       const admitted = await admit(n.author.did)
