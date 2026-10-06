@@ -132,7 +132,6 @@ export function renderSvg(t: Talk, { full = false } = {}): string {
       ...d.images.map((img) => `saw: "${clip(img, full ? 200 : 60)}"`),
       ...((t as Partial<HybridTalk>).rewrite?.kept === 'after' ? [`rewrote: ${(t as HybridTalk).rewrite!.edits.map((e) => `${e.from} → ${e.to || '∅'}`).join(', ')}`] : []),
       ...((t as Partial<HybridTalk>).case && (t as HybridTalk).case!.case !== 'lower' ? [`case: ${(t as HybridTalk).case!.case} ${Math.round((t as HybridTalk).case!.confidence * 100)}%`] : []),
-      ...((t as Partial<HybridTalk>).scores ? [modLine((t as HybridTalk).scores!)] : []),
       ...(path ? [`path: ${path === 'beam' ? `beam → ${Object.keys((t as Partial<HybridTalk>).judged ?? {}).length} drafts` : 'single draft'}`] : []),
     ]
     parts.push(`<text x="${PAD}" y="${y - 2}" font-family="${SANS}" font-size="14" fill="${C.ink}">${esc(bits.join('  ·  '))}</text>`)
@@ -143,6 +142,27 @@ export function renderSvg(t: Talk, { full = false } = {}): string {
         y += 20
       }
     y += 6
+  }
+  // Slashdot-style self-moderation: each rubric as five dots, filled to its 0-5 score.
+  const scores = (t as Partial<HybridTalk>).scores
+  if (scores) {
+    parts.push(`<text x="${PAD}" y="${y + 4}" font-family="${SANS}" font-size="12" font-weight="700" fill="${C.muted}" letter-spacing="1">SELF-MODERATED</text>`)
+    let x = PAD + 132
+    for (const [name, value] of Object.entries(scores)) {
+      const label = `${name[0].toUpperCase()}${name.slice(1)}`
+      parts.push(`<text x="${x + 5 * 17 + 4}" y="${y + 5}" font-family="${SANS}" font-size="14" fill="${C.ink}">${esc(label)}</text>`)
+      for (let i = 0; i < 5; i++) {
+        const cx = x + 7 + i * 17
+        const fill = Math.max(0, Math.min(1, value - i))
+        const id = `mod-${name}-${i}`
+        parts.push(`<clipPath id="${id}"><circle cx="${cx}" cy="${y}" r="6.5"/></clipPath>`)
+        parts.push(`<circle cx="${cx}" cy="${y}" r="6.5" fill="${C.chip}"/>`)
+        if (fill > 0) parts.push(`<rect x="${cx - 6.5}" y="${y - 6.5}" width="${13 * fill}" height="13" fill="${C.orange}" clip-path="url(#${id})"/>`)
+        parts.push(`<circle cx="${cx}" cy="${y}" r="6.5" fill="none" stroke="${C.ink}" stroke-opacity="0.35" stroke-width="1"/>`)
+      }
+      x += 5 * 17 + 4 + 112
+    }
+    y += 32
   }
   // When there was more than one candidate: each, and how Jev rated it as a final answer.
   const judged = (t as Partial<BeamTalk>).judged
