@@ -51,6 +51,7 @@ import {
   PRUNE_MAX,
   STUCK_AFTER,
   STUCK_CHECK,
+  steerFromEcho,
 } from './talk.ts'
 
 export type BeamOptions = {
@@ -114,6 +115,7 @@ export async function rateDrafts(question: string, drafts: string[], conversatio
       ids.flatMap((id) => [
         [id, noul(`Is candidate \`${id}\` ${MODES[mode].judge}?`)],
         [`${id}_generic`, noul(`Is candidate \`${id}\` generic: a reply that could answer almost any message?`)],
+        ...(ECHO_JUDGE ? [[`${id}_echo`, noul(`Does candidate \`${id}\` mostly repeat the question's own words back, rather than answering in its own?`)] as const] : []),
         ...(MODERATE ? Object.entries(rubricQuestions(`candidate \`${id}\`, as your reply`, `${id}_score`)) : []),
         ...(COMPLETE ? [[`${id}_complete`, noul(`Is candidate \`${id}\` a complete thought, rather than cut off mid-sentence?`)] as const] : []),
         ...(BROKEN ? wordsOfDraft(drafts[ids.indexOf(id)]).map((w, j) => [`${id}_w${j}`, noul(`Would you replace word ${j + 1} of candidate \`${id}\` ("${w}") with a better word, if you could?`)] as const) : []),
@@ -135,11 +137,16 @@ export async function rateDrafts(question: string, drafts: string[], conversatio
   const said = (conversation ?? []).filter((p) => p.author.startsWith('you')).map((p) => p.text)
   return drafts.map((d, i) => {
     const complete = COMPLETE ? v(`${ids[i]}_complete`) : 1
-    const rating = adjust(d, question, v(ids[i]) * (1 - GENERIC_WEIGHT * v(`${ids[i]}_generic`)) * (1 - BROKEN_WEIGHT * broken(i)) * (1 - CUT_OFF_WEIGHT * (1 - complete)))
+    const echo = ECHO_JUDGE ? 1 - ECHO_JUDGE_WEIGHT * v(`${ids[i]}_echo`) : 1
+    const rating = echo * adjust(d, question, v(ids[i]) * (1 - GENERIC_WEIGHT * v(`${ids[i]}_generic`)) * (1 - BROKEN_WEIGHT * broken(i)) * (1 - CUT_OFF_WEIGHT * (1 - complete)))
     return said.some((s) => repeats(d, s)) ? rating * REPEAT_PENALTY : rating
   })
 }
 const BROKEN = process.env.JEV_BROKEN === 'on'
+// JEV_ECHO_JUDGE=on: the judge also says whether a draft mostly repeats the question, and the
+// rating is cut by up to ECHO_JUDGE_WEIGHT of that (on top of the strict all-words echo rule).
+const ECHO_JUDGE = process.env.JEV_ECHO_JUDGE === 'on'
+const ECHO_JUDGE_WEIGHT = 0.6
 // A fragment like "you're" or "i am not" is marked down by how sure Jev is that it's cut off
 // (JEV_COMPLETE=off skips the question): it won "good effort, JT" over "you are excellent".
 const COMPLETE = process.env.JEV_COMPLETE !== 'off'
@@ -272,7 +279,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
     )
     const raw = await ask(branchQuestions, branchState, unrated())
     if (!raw) break
-    const answers = Object.fromEntries(ids.map((id, i) => [id, unpresent((raw as Record<string, { choice: string; confidence: number; probabilities: Record<string, number> }>)[id], presented[i].back)]))
+    const answers = Object.fromEntries(ids.map((id, i) => [id, steerFromEcho(unpresent((raw as Record<string, { choice: string; confidence: number; probabilities: Record<string, number> }>)[id], presented[i].back), question)]))
     const fixes = raw as Record<string, { noul?: number }>
 
     const children: Branch[] = []

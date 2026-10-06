@@ -214,6 +214,13 @@ export function unpresent<T extends { choice: string; probabilities: Record<stri
 }
 // Spell out the cost of a near-miss (JEV_LETTER_HINT=off drops this): picking a word that isn't quite
 // right and deleting it takes two picks, while one or two letters bring up better candidates.
+// JEV_OWN_WORDS=on: ask for the reply in Jev's own words rather than the question's.
+const OWN_WORDS =
+  process.env.JEV_OWN_WORDS === 'on'
+    ? `
+  Say it in your own words rather than repeating the question's words back; spelling out the word
+  you actually want is fine.`
+    : ''
 const LETTER_HINT = process.env.JEV_LETTER_HINT !== 'off'
   ? `
   If none of the predicted words is the one you want, don't pick a near miss and delete it later:
@@ -233,7 +240,7 @@ menu option. Options are:
 - "word: X" — append the predicted word X to your sentence.
 - "${ANGLE ? '<x>' : 'letter: X'}" — type a letter to narrow the word predictions to words starting with what you've typed
   (use this when the word you want is not among the predictions). Any letter or digit can be typed, so
-  you can spell any word, then enter it as typed.${LETTER_HINT}
+  you can spell any word, then enter it as typed.${LETTER_HINT}${OWN_WORDS}
 - "${ANGLE ? '<.>' : 'key: X'}" — type a punctuation mark${ANGLE ? ' (the mark between the brackets)' : ' X'}: every mark on a keyboard, plus — and …, and any mark can be
   typed as often as you like.
 - "${SPACE}" — end the word you're typing, exactly as typed (after letters, punctuation or both).
@@ -716,13 +723,33 @@ export function flagSwap(b: Branch, target: { idx: number; word: string } | unde
 // off the menu), aimed at the pick-a-word-then-delete-it churn.
 const STATE_V2 = process.env.JEV_STATE === 'v2'
 const PREVIEW = process.env.JEV_PREVIEW !== 'off'
+const LATE_BUDGET = process.env.JEV_PICK_BUDGET === 'late'
+const PICKS_WARNING = 10
+// JEV_ECHO_WEIGHT=<w>: a predicted word taken from the question has its probability multiplied by
+// w before the pick is made, so an echo wins only when Jev clearly prefers it over everything else.
+// Common words ("is", "the", "you") are exempt.
+export const ECHO_WEIGHT = Number(process.env.JEV_ECHO_WEIGHT ?? 1)
+const COMMON_WORDS = new Set([...unigram].sort((x, y) => y[1] - x[1]).slice(0, 150).map(([w]) => w))
+const questionWords = (question: string) => new Set((question.toLowerCase().match(/[a-z][a-z0-9']*/g) ?? []).filter((w) => !COMMON_WORDS.has(w) && !['i', 'you', 'your', "you're"].includes(w)))
+export function steerFromEcho<T extends { choice: string; confidence: number; probabilities: Record<string, number> }>(a: T, question: string): T {
+  if (ECHO_WEIGHT === 1) return a
+  const echo = questionWords(question)
+  const weigh = ([o, p]: [string, number]) => (o.startsWith('word: ') && o.slice(6).split(' ').some((w) => echo.has(w.toLowerCase())) ? p * ECHO_WEIGHT : p)
+  const best = Object.entries(a.probabilities).reduce((x, y) => (weigh(y) > weigh(x) ? y : x))
+  return best[0] === a.choice ? a : { ...a, choice: best[0], confidence: best[1], steered: a.choice }
+}
 export function typingState(b: Branch, maxSteps: number): Record<string, string | string[]> {
   const text = branchText(b)
   if (!STATE_V2) return { text_so_far: text || '(nothing yet)', letters_typed: b.prefix || '(none)' }
   const tried = [...(b.rejected.get(branchKey(b)) ?? [])].filter((o) => o.startsWith('word: ')).map((o) => o.slice(6))
   return {
     text_so_far: `${text}${text && b.prefix ? ' ' : ''}${b.prefix}▮`,
-    picks_used: `${b.steps.length} of at most ${maxSteps}; most good replies take 5 to 20`,
+    // JEV_PICK_BUDGET=late: the pick count is only shown in the last PICKS_WARNING picks.
+    ...(!LATE_BUDGET
+      ? { picks_used: `${b.steps.length} of at most ${maxSteps}; most good replies take 5 to 20` }
+      : maxSteps - b.steps.length <= PICKS_WARNING
+        ? { picks_left: `${maxSteps - b.steps.length}: finish your reply soon` }
+        : {}),
     ...(tried.length ? { already_tried_and_deleted_here: tried } : {}),
   }
 }
@@ -782,7 +809,8 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
       break
     }
     const r = await client.systemOne({ state, questions })
-    const a = unpresent(r.answers.next as { choice: string; confidence: number; probabilities: Record<string, number> }, shownMenu.back)
+    const a = steerFromEcho(unpresent(r.answers.next as { choice: string; confidence: number; probabilities: Record<string, number> }, shownMenu.back), question)
+    if ('steered' in a) log(`   echo: "${String(a.steered).slice(6)}" from the question; took ${a.choice} instead`)
     const fixes = Object.fromEntries(['fix', 'fix_form', 'fix_syn'].filter((k) => k in r.answers).map((k) => [k, ((r.answers as Record<string, unknown>)[k] as { noul: number }).noul])) as { fix?: number; fix_form?: number; fix_syn?: number }
     const fixVals = Object.values(fixes)
     const fix = fixVals.length ? Math.max(...fixVals) : undefined
