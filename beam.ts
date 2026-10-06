@@ -28,6 +28,7 @@ import {
   swappable,
   typingState,
   flagSwap,
+  fixQuestions,
   type Post,
   type Step,
   recentActions,
@@ -190,7 +191,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
     const branchQuestions = Object.fromEntries(
       ids.flatMap((id, i) => [
         [id, choice(`Which menu option do you pick next for branch \`${id}\`?`, menus[i])],
-        ...(targets[i] ? [[`${id}_fix`, noul(`For branch \`${id}\`: would you replace the last word of its text_so_far ("${targets[i]!.word}") with a better word, if you could?`)]] : []),
+        ...(targets[i] ? Object.entries(fixQuestions(targets[i]!.word, `the last word of branch \`${id}\`'s text_so_far`)).map(([k, q]) => [`${id}_${k}`, q]) : []),
       ]),
     )
     const raw = await ask(branchQuestions, branchState, unrated())
@@ -214,13 +215,14 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
       for (const pick of picks) {
         const child = cloneBranch(b)
         const p = a.probabilities[pick] ?? a.confidence
-        const fix = fixes[`${ids[i]}_fix`]?.noul
+        const own = Object.fromEntries(['fix', 'fix_form', 'fix_syn'].map((k) => [k, fixes[`${ids[i]}_${k}`]?.noul]).filter(([, v]) => v !== undefined))
+        const fix = Object.values(own).length ? Math.max(...(Object.values(own) as number[])) : undefined
         child.steps.push({ menu: Object.keys(menus[i]), pick, confidence: p, probabilities: a.probabilities, ...(fix !== undefined ? { fix } : {}) })
         child.score *= p
         if (isSpeak(pick)) finished.push(child)
         else {
           applyPick(child, pick)
-          flagSwap(child, targets[i], fix)
+          flagSwap(child, targets[i], own)
           children.push(child)
         }
       }
