@@ -384,7 +384,8 @@ async function pollMentions() {
     // like either: Bluesky accepts such a reply but leaves it stranded outside the thread.
     const [view] = (await agent.getPosts({ uris: [n.uri] }).catch(() => ({ data: { posts: [] } }))).data.posts
     if (view?.viewer?.replyDisabled) {
-      log(`replies limited by the thread author; skipping @${n.author.handle}`)
+      log(`replies limited by the thread author; answering @${n.author.handle} elsewhere`)
+      if ((await admit(n.author.did)) === 'ok') void elsewhere(n, record, question, linked)
       continue
     }
     // A retry was already admitted and liked; only a first attempt counts against the limits.
@@ -404,6 +405,31 @@ async function pollMentions() {
     void replyTo(n, record, question, linked, full, root, parent).finally(() => inFlight.delete(n.uri))
   }
   await agent.updateSeenNotifications()
+}
+
+// A mention in a thread JT may not reply to is answered by DM when the asker accepts DMs from
+// JT, and otherwise gets a short public note mentioning them, so they aren't left wondering.
+async function elsewhere(n: Incoming, record: { reply?: unknown }, question: string, linked: Post[]) {
+  const link = `https://bsky.app/profile/${n.author.handle}/post/${n.uri.split('/').pop()}`
+  try {
+    const { data } = await chat.chat.bsky.convo.getConvoAvailability({ members: [n.author.did] })
+    if (data.canChat) {
+      const convoId = data.convo?.id ?? (await chat.chat.bsky.convo.getConvoForMembers({ members: [n.author.did] })).data.convo.id
+      const send = (text: string) => chat.chat.bsky.convo.sendMessage({ convoId, message: { text } })
+      const thread = record.reply ? await threadContext(n.uri) : []
+      const t = await answer(question, [...thread, ...linked, { author: `@${n.author.handle}`, role: 'asker', text: question }])
+      await send(`You mentioned me in a thread where I can’t reply (its author limits replies), so here’s my answer to ${link}`)
+      await send(headline(t))
+      for (const chunk of traceChunks(t, DM_LIMIT)) await send(chunk)
+      return
+    }
+    const text = `@${n.author.handle} sorry, I can’t reply in that thread: its author limits who can. Ask me in a new post or a DM.`
+    const rt = new RichText({ text })
+    await rt.detectFacets(agent)
+    await agent.post({ text: rt.text, facets: rt.facets })
+  } catch (e) {
+    log(`couldn't answer @${n.author.handle} elsewhere:`, e instanceof Error ? e.message : e)
+  }
 }
 
 // --- DMs -----------------------------------------------------------------------
