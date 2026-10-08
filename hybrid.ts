@@ -64,7 +64,8 @@ async function compose(question: string, opts: HybridOptions = {}): Promise<Hybr
   // Unfamiliar words from the conversation join the word menu: all of them, or (the default)
   // only those Jev says it might use. JEV_CONTEXT_WORDS=all|judge|off.
   const cwMode = process.env.JEV_CONTEXT_WORDS ?? 'judge'
-  const unfamiliar = cwMode === 'off' ? [] : unfamiliarWords([...(conversation ?? []).map((p) => p.text), question])
+  // JT's own posts are left out, so its "idk," (typed in for it by the verdict) isn't learned back.
+  const unfamiliar = cwMode === 'off' ? [] : unfamiliarWords([...(conversation ?? []).filter((p) => p.role !== 'you').map((p) => p.text), question])
   // The mode, verdict and context-word questions share one call (separate calls when the mode is given).
   const classified = opts.mode ? null : await classify(question, conversation, keyboardBy === 'jev' && process.env.JEV_ROUTING === 'on', cwMode === 'judge' ? unfamiliar : [])
   const mode = opts.mode ?? classified!.mode
