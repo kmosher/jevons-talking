@@ -258,10 +258,13 @@ role "linked" marks posts that were linked or quoted; "images" holds description
 // Yes/no answers ask for a reason with personality (JEV_YESNO_STYLE=plain: a plain justification);
 // on 10 questions it gave "no, it's a ball" for the flat earth and scored higher in 7.
 const VIVID = process.env.JEV_YESNO_STYLE !== 'plain'
+// JEV_MODES=v1 restores the old instructions, each ending "…then pick SPEAK": that read as a cue to
+// stop at once. What SPEAK does is in the keyboard instructions.
+const V1 = process.env.JEV_MODES === 'v1'
 export const MODES = {
   answer: {
     when: 'it asks a question that can be answered',
-    instruction: `Aim for a short, correct answer of one or two sentences, then pick ${SPEAK}.`,
+    instruction: V1 ? `Aim for a short, correct answer of one or two sentences, then pick ${SPEAK}.` : 'Aim for a correct answer of one or two sentences.',
     judge: 'a good answer to the question',
   },
   comeback: {
@@ -276,30 +279,32 @@ export const MODES = {
   },
   react: {
     when: 'it shares something (a link, image, post, news, a remark or an opinion) and invites your reaction',
-    instruction: `React to what was shared or said with a short, opinionated sentence, then pick ${SPEAK}.`,
+    instruction: V1 ? `React to what was shared or said with a short, opinionated sentence, then pick ${SPEAK}.` : 'React to what was shared or said with an opinionated sentence.',
     judge: 'a good reaction to what was shared or said',
   },
   scene: {
     when: 'it sets a scene, plays a game, or asks you to imagine, describe or role-play something',
-    instruction: `Play along: say in character what you see, do or feel, in a short sentence, then pick ${SPEAK}.`,
+    instruction: V1 ? `Play along: say in character what you see, do or feel, in a short sentence, then pick ${SPEAK}.` : 'Play along: say in character what you see, do or feel.',
     judge: 'a good in-character reply that plays along',
   },
   yesno: {
     when: 'it is a yes-or-no question',
     instruction: VIVID
-      ? `Your verdict on the yes-or-no question is already typed. Back it up in a few words with some personality: a vivid comparison, a surprising detail or a joke, then pick ${SPEAK}.`
+      ? `Your verdict on the yes-or-no question is already typed. Back it up in a few words with some personality: a vivid comparison, a surprising detail or a joke${V1 ? `, then pick ${SPEAK}` : ''}.`
       : `Your verdict on the yes-or-no question is already typed. Justify it in a few words, then pick ${SPEAK}.`,
     judge: VIVID ? 'a good, colorful answer to the yes-or-no question, with a reason' : 'a good answer to the yes-or-no question, with a reason',
   },
   ask: {
     when: 'it asks you to ask something, or the best reply is a question of your own back',
-    instruction: `Reply with a short question of your own, then pick ${SPEAK}.`,
+    instruction: V1 ? `Reply with a short question of your own, then pick ${SPEAK}.` : 'Reply with a question of your own.',
     judge: 'a good question to ask in reply',
   },
   acknowledge: {
     when: 'it is thanks, praise, a greeting or a goodbye',
-    instruction: `Reply graciously in a few words, then pick ${SPEAK}.`,
-    judge: 'a fitting reply to the message',
+    instruction: V1
+      ? `Reply graciously in a few words, then pick ${SPEAK}.`
+      : 'Take it in character: return the greeting, accept the compliment with a little swagger or a joke, or give a memorable goodbye; a few words or a sentence.',
+    judge: V1 ? 'a fitting reply to the message' : "a warm reply with some personality, not just 'thanks'",
   },
 } as const
 export type Mode = keyof typeof MODES
