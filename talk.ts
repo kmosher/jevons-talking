@@ -32,7 +32,7 @@ export type Talk = { question: string; answer: string; finished: boolean; steps:
 // own fields, not inside the text, so Jev can tell what was said from what was seen or tried.
 export type Role = 'thread' | 'you' | 'linked' | 'asker' | 'gap'
 export type Post = { author: string; role?: Role; text: string; images?: string[]; rejected_drafts?: string[] }
-type Options = { keyboard?: Keyboard; mode?: Mode; phrases?: number; conversation?: Post[]; extraInstructions?: string; prefill?: string[]; extraWords?: string[]; banned?: Set<string>; minWordsToSpeak?: number; confirmSpeak?: boolean; maxRejections?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
+type Options = { keyboard?: Keyboard; mode?: Mode; phrases?: number; conversation?: Post[]; extraInstructions?: string; prefill?: string[]; extraWords?: string[]; banned?: Set<string>; temperature?: number; minWordsToSpeak?: number; confirmSpeak?: boolean; maxRejections?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
 
 // --- Blocklist ---------------------------------------------------------------
 const blocked = new Set(
@@ -319,6 +319,8 @@ export type Prepared = {
   // Whether the message asks for something different from JT's earlier replies (asked only
   // when the thread has some).
   novelty?: number
+  // How playful and surprising the reply should be, 0-5 (JEV_TEMPERATURE=jev).
+  playful?: number
 }
 export async function classify(question: string, conversation?: Post[], chooseKeyboard = false, words: string[] = []): Promise<Prepared> {
   const r = await jev().systemOne({
@@ -338,6 +340,7 @@ export async function classify(question: string, conversation?: Post[], chooseKe
         : {}),
       ...VERDICT_QUESTIONS,
       ...wordQuestions(words),
+      ...(TEMPERATURE_BY_JEV ? { playful: score('How playful and surprising should your reply be?', ['not at all: plain and factual', 'barely', 'a little', 'fairly', 'very', 'as playful and surprising as a reply gets']) } : {}),
       ...(conversation?.some((p) => p.role === 'you') ? { novelty: noul('Is the message pushing back on your earlier reply, or asking you to say something new instead of repeating yourself?') } : {}),
     },
   })
@@ -351,6 +354,7 @@ export async function classify(question: string, conversation?: Post[], chooseKe
     verdict: readVerdict(r.answers),
     contextWords: readWords(r.answers, words),
     novelty: (r.answers as Record<string, { noul?: number }>).novelty?.noul,
+    playful: (r.answers as Record<string, { score?: number }>).playful?.score,
   }
 }
 // Drops thread posts Jev rates irrelevant to the latest message, so stray topics (a horse joke five
@@ -761,6 +765,26 @@ export function repeatedPairs(conversation: Post[] | undefined): Set<string> {
   }
   return pairs
 }
+// Sampling (JEV_TEMPERATURE=jev): instead of always taking Jev's pick, draw among the options
+// within half of the top option's probability, weighted p^(1/T). T comes from Jev's own 0-5
+// "how playful should this be?" score, times TEMPERATURE_PER_POINT; 0 keeps Jev's pick. The draw
+// is seeded by the question and the text so far, so a rerun (and the replay cache) repeats it.
+export const TEMPERATURE_BY_JEV = process.env.JEV_TEMPERATURE === 'jev'
+const TEMPERATURE_PER_POINT = Number(process.env.JEV_TEMPERATURE_PER_POINT ?? 0.3)
+export const temperatureFor = (playful?: number) => (TEMPERATURE_BY_JEV && playful ? playful * TEMPERATURE_PER_POINT : 0)
+const seeded = (key: string) => (Number.parseInt(createHash('sha256').update(key).digest('hex').slice(0, 12), 16) % 1e9) / 1e9
+export function sample<T extends { choice: string; confidence: number; probabilities: Record<string, number> }>(a: T, temperature: number, key: string): T {
+  if (!temperature) return a
+  const top = Math.max(...Object.values(a.probabilities))
+  const near = Object.entries(a.probabilities).filter(([, p]) => p >= top / 2)
+  if (near.length < 2) return a
+  const w = near.map(([, p]) => p ** (1 / temperature))
+  const r = seeded(key) * w.reduce((x, y) => x + y, 0)
+  let i = 0
+  for (let acc = w[0]; acc <= r && i < near.length - 1; acc += w[++i]);
+  const [choice, p] = near[i]
+  return choice === a.choice ? a : { ...a, choice, confidence: p, sampled: a.choice }
+}
 export function steerFromEcho<T extends { choice: string; confidence: number; probabilities: Record<string, number> }>(a: T, question: string): T {
   if (ECHO_WEIGHT === 1) return a
   const echo = questionWords(question)
@@ -823,7 +847,7 @@ export const recentActions = (b: Branch) => {
 }
 
 export async function talk(question: string, opts: Options = {}): Promise<Talk> {
-  const { keyboard = DEFAULT_KEYBOARD, mode = 'answer', phrases = 0, conversation, extraInstructions, prefill = [], extraWords = [], banned, minWordsToSpeak = 1, confirmSpeak = false, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
+  const { keyboard = DEFAULT_KEYBOARD, mode = 'answer', phrases = 0, conversation, extraInstructions, prefill = [], extraWords = [], banned, temperature = 0, minWordsToSpeak = 1, confirmSpeak = false, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
   client ??= newClient()
   const b = newBranch(prefill)
 
@@ -839,7 +863,8 @@ export async function talk(question: string, opts: Options = {}): Promise<Talk> 
       break
     }
     const r = await client.systemOne({ state, questions })
-    const a = steerFromEcho(unpresent(r.answers.next as { choice: string; confidence: number; probabilities: Record<string, number> }, shownMenu.back), question)
+    const a = sample(steerFromEcho(unpresent(r.answers.next as { choice: string; confidence: number; probabilities: Record<string, number> }, shownMenu.back), question), temperature, `${question}\0${branchText(b)}\0${b.prefix}\0${step}`)
+    if ('sampled' in a) log(`   sampled ${a.choice} over ${String(a.sampled)} (T=${temperature.toFixed(2)})`)
     if ('steered' in a) log(`   echo: "${String(a.steered).slice(6)}" from the question; took ${a.choice} instead`)
     const fixes = Object.fromEntries(['fix', 'fix_form', 'fix_syn'].filter((k) => k in r.answers).map((k) => [k, ((r.answers as Record<string, unknown>)[k] as { noul: number }).noul])) as { fix?: number; fix_form?: number; fix_syn?: number }
     const fixVals = Object.values(fixes)
