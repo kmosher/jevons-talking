@@ -32,7 +32,7 @@ export type Talk = { question: string; answer: string; finished: boolean; steps:
 // own fields, not inside the text, so Jev can tell what was said from what was seen or tried.
 export type Role = 'thread' | 'you' | 'linked' | 'asker' | 'gap'
 export type Post = { author: string; role?: Role; text: string; images?: string[]; rejected_drafts?: string[] }
-type Options = { keyboard?: Keyboard; mode?: Mode; phrases?: number; conversation?: Post[]; extraInstructions?: string; prefill?: string[]; extraWords?: string[]; minWordsToSpeak?: number; confirmSpeak?: boolean; maxRejections?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
+type Options = { keyboard?: Keyboard; mode?: Mode; phrases?: number; conversation?: Post[]; extraInstructions?: string; prefill?: string[]; extraWords?: string[]; banned?: Set<string>; minWordsToSpeak?: number; confirmSpeak?: boolean; maxRejections?: number; maxSteps?: number; words?: number; common?: number; dryRun?: boolean; log?: (line: string) => void }
 
 // --- Blocklist ---------------------------------------------------------------
 const blocked = new Set(
@@ -316,6 +316,9 @@ export type Prepared = {
   keyboardConfidence?: number
   verdict: { yes: number; know: number; word: string }
   contextWords: { word: string; p: number }[]
+  // Whether the message asks for something different from JT's earlier replies (asked only
+  // when the thread has some).
+  novelty?: number
 }
 export async function classify(question: string, conversation?: Post[], chooseKeyboard = false, words: string[] = []): Promise<Prepared> {
   const r = await jev().systemOne({
@@ -335,6 +338,7 @@ export async function classify(question: string, conversation?: Post[], chooseKe
         : {}),
       ...VERDICT_QUESTIONS,
       ...wordQuestions(words),
+      ...(conversation?.some((p) => p.role === 'you') ? { novelty: noul('Is the message pushing back on your earlier reply, or asking you to say something new instead of repeating yourself?') } : {}),
     },
   })
   const a = r.answers.mode as { choice: Mode; confidence: number }
@@ -346,6 +350,7 @@ export async function classify(question: string, conversation?: Post[], chooseKe
     keyboardConfidence: k?.confidence,
     verdict: readVerdict(r.answers),
     contextWords: readWords(r.answers, words),
+    novelty: (r.answers as Record<string, { noul?: number }>).novelty?.noul,
   }
 }
 // Drops thread posts Jev rates irrelevant to the latest message, so stray topics (a horse joke five
@@ -473,7 +478,7 @@ const EMOJI_ON = process.env.JEV_EMOJI === 'on'
 const EMOJI = [...'🙂😂🤔😢😡😱👍👎🙏🎉🔥✨👀🤖🐢🌙💀🤷'].filter((c) => c.trim())
 const PUNCTUATION = [...'.,?!:;\'"-–—…()[]{}/\\&*@#$%^+=_~<>|`']
 
-export type MenuOptions = { words: number; common: number; minWordsToSpeak: number; phrases?: number; keyboard?: Keyboard; extra?: string[] }
+export type MenuOptions = { words: number; common: number; minWordsToSpeak: number; phrases?: number; keyboard?: Keyboard; extra?: string[]; banned?: Set<string> }
 
 export const newBranch = (words: string[] = []): Branch => ({ words: [...words], locked: words.length, prefix: '', undo: [], rejected: new Map(), steps: [], rejections: 0, score: 1 })
 export const cloneBranch = (b: Branch): Branch => ({
@@ -542,6 +547,14 @@ export function menuFor(b: Branch, o: MenuOptions): Record<string, string> {
   if (prefix || words.length > b.locked) menu.backspace = prefix ? `delete the typed letter "${prefix.at(-1)}"` : `delete "${words.at(-1)}"`
   if (words.filter((w) => /\w/.test(w)).length >= o.minWordsToSpeak && !prefix) menu[SPEAK] = 'finish and speak the text aloud'
   for (const opt of b.rejected.get(branchKey(b)) ?? []) delete menu[opt]
+  // Word pairs JT already used in the thread, when the message asks for something new (see repeatedPairs).
+  if (o.banned?.size && !prefix) {
+    const prev2 = words.length > 1 ? words.at(-2)!.toLowerCase() : ''
+    for (const k of Object.keys(menu)) {
+      const w = k.startsWith('word: ') ? k.slice(6).split(' ')[0].toLowerCase() : ''
+      if (w && (o.banned.has(`${prev} ${w}`) || o.banned.has(`${prev2} ${prev} ${w}`))) delete menu[k]
+    }
+  }
   // Jev takes at most 255 options; the lowest-ranked predictions make room for swaps and thread words.
   const over = Object.keys(menu).length - MAX_OPTIONS
   if (over > 0) for (const w of predicted.slice(-over).reverse()) delete menu[`word: ${w}`]
@@ -732,6 +745,22 @@ const PICKS_WARNING = 10
 export const ECHO_WEIGHT = Number(process.env.JEV_ECHO_WEIGHT ?? 0.3)
 const COMMON_WORDS = new Set([...unigram].sort((x, y) => y[1] - x[1]).slice(0, 150).map(([w]) => w))
 const questionWords = (question: string) => new Set((question.toLowerCase().match(/[a-z][a-z0-9']*/g) ?? []).filter((w) => !COMMON_WORDS.has(w) && !['i', 'you', 'your', "you're"].includes(w)))
+// When the message asks for something new ("be specific", "you already said that"), each word
+// pair from JT's own earlier replies in the thread is taken off the menu, so it can't type the
+// same phrase again. Pairs ending in a common word ("is a", "of the") stay, or grammar suffers.
+export function repeatedPairs(conversation: Post[] | undefined): Set<string> {
+  const pairs = new Set<string>()
+  for (const p of conversation ?? []) {
+    if (p.role !== 'you') continue
+    const ws = p.text.toLowerCase().match(/[a-z0-9']+/g) ?? []
+    for (let i = 1; i < ws.length; i++) {
+      if (!COMMON_WORDS.has(ws[i])) pairs.add(`${ws[i - 1]} ${ws[i]}`)
+      // Three-word runs are banned whatever the words, which catches "than are now".
+      if (i >= 2) pairs.add(`${ws[i - 2]} ${ws[i - 1]} ${ws[i]}`)
+    }
+  }
+  return pairs
+}
 export function steerFromEcho<T extends { choice: string; confidence: number; probabilities: Record<string, number> }>(a: T, question: string): T {
   if (ECHO_WEIGHT === 1) return a
   const echo = questionWords(question)
@@ -794,12 +823,12 @@ export const recentActions = (b: Branch) => {
 }
 
 export async function talk(question: string, opts: Options = {}): Promise<Talk> {
-  const { keyboard = DEFAULT_KEYBOARD, mode = 'answer', phrases = 0, conversation, extraInstructions, prefill = [], extraWords = [], minWordsToSpeak = 1, confirmSpeak = false, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
+  const { keyboard = DEFAULT_KEYBOARD, mode = 'answer', phrases = 0, conversation, extraInstructions, prefill = [], extraWords = [], banned, minWordsToSpeak = 1, confirmSpeak = false, maxRejections = 2, maxSteps = 100, words: nWords = 150, common = 30, dryRun = false, log = () => {} } = opts
   client ??= newClient()
   const b = newBranch(prefill)
 
   for (let step = 0; step < maxSteps; step++) {
-    const menu = menuFor(b, { words: nWords, common, minWordsToSpeak: minWordsToSpeak + prefill.length, phrases, keyboard, extra: extraWords })
+    const menu = menuFor(b, { words: nWords, common, minWordsToSpeak: minWordsToSpeak + prefill.length, phrases, keyboard, extra: extraWords, banned })
     const state = { instructions: extraInstructions ? `${instructionsFor(mode, keyboard)}\n${extraInstructions}` : instructionsFor(mode, keyboard), ...(conversation?.length ? { conversation_so_far: conversation } : {}), question, recent_actions: recentActions(b), ...typingState(b, maxSteps) }
     const target = swappable(b)
     const caseT = caseTarget(b)

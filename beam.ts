@@ -63,6 +63,7 @@ export type BeamOptions = {
   prefill?: string[]
   // Words from the conversation added to every menu (see unfamiliarWords).
   extraWords?: string[]
+  banned?: Set<string>
   conversation?: Post[]
   width?: number
   split?: number
@@ -201,7 +202,7 @@ function distinctBy<T>(items: T[], key: (t: T) => string): T[] {
 }
 
 export async function beam(question: string, opts: BeamOptions = {}): Promise<BeamTalk> {
-  const { keyboard, mode = 'answer', conversation, seed = [], prefill = [], extraWords = [], width = 3, split = 0.05, maxSplit = 3, maxSteps = 40, scoring = 'mean', good = GOOD_ENOUGH, dryRun = false, log = () => {} } = opts
+  const { keyboard, mode = 'answer', conversation, seed = [], prefill = [], extraWords = [], banned, width = 3, split = 0.05, maxSplit = 3, maxSteps = 40, scoring = 'mean', good = GOOD_ENOUGH, dryRun = false, log = () => {} } = opts
   // A product of probabilities shrinks with every pick, so it favours short drafts; the
   // geometric mean ranks drafts by how confident each pick was, whatever their length.
   const rank = (b: Branch) =>
@@ -262,7 +263,7 @@ export async function beam(question: string, opts: BeamOptions = {}): Promise<Be
 
   for (let step = 0; step < maxSteps && live.length; step++) {
     const ids = live.map((_, i) => `b${i}`)
-    const menus = live.map((b) => menuFor(b, { ...MENU, minWordsToSpeak: MENU.minWordsToSpeak + prefill.length, keyboard, extra: extraWords }))
+    const menus = live.map((b) => menuFor(b, { ...MENU, minWordsToSpeak: MENU.minWordsToSpeak + prefill.length, keyboard, extra: extraWords, banned }))
     const branchState = Object.fromEntries(
       live.map((b, i) => [ids[i], { ...typingState(b, maxSteps), recent_actions: recentActions(b) }]),
     )
