@@ -266,7 +266,12 @@ export const MODES = {
   },
   comeback: {
     when: 'it challenges, teases, insults or provokes you, or makes a joke at your expense',
-    instruction: `The message is not really a question: reply with a short, witty comeback, then pick ${SPEAK}.`,
+    // "Short… then SPEAK" (JEV_COMEBACK=v1) read as "stop after two words"; without it, a side-by-side
+    // judge rated comebacks 37% funny and sharp against 32% ("mogged you back" over "i mogged you").
+    instruction:
+      process.env.JEV_COMEBACK !== 'v1'
+        ? 'The message is not really a question: reply with a witty comeback. Turn it back on them, play along, or exaggerate; a few words or a whole sentence.'
+        : `The message is not really a question: reply with a short, witty comeback, then pick ${SPEAK}.`,
     judge: 'a good, witty reply to the message',
   },
   react: {

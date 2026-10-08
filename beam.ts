@@ -141,7 +141,10 @@ export async function rateDrafts(question: string, drafts: string[], conversatio
   return drafts.map((d, i) => {
     const complete = COMPLETE ? v(`${ids[i]}_complete`) : 1
     const echo = ECHO_JUDGE ? 1 - ECHO_JUDGE_WEIGHT * v(`${ids[i]}_echo`) : 1
-    const rating = echo * adjust(d, question, v(ids[i]) * (1 - GENERIC_WEIGHT * v(`${ids[i]}_generic`)) * (1 - BROKEN_WEIGHT * broken(i)) * (1 - CUT_OFF_WEIGHT * (1 - complete)))
+    // JEV_FUNNY=on: a comeback's rating also scales with its self-moderation "funny" score (0-5).
+    const funnyScore = FUNNY && mode === 'comeback' ? draftScores.get(`${question}\0${forRating(d)}`)?.funny : undefined
+    const funny = funnyScore === undefined ? 1 : FUNNY_FLOOR + ((1 - FUNNY_FLOOR) * funnyScore) / 5
+    const rating = funny * echo * adjust(d, question, v(ids[i]) * (1 - GENERIC_WEIGHT * v(`${ids[i]}_generic`)) * (1 - BROKEN_WEIGHT * broken(i)) * (1 - CUT_OFF_WEIGHT * (1 - complete)))
     return said.some((s) => repeats(d, s)) ? rating * REPEAT_PENALTY : rating
   })
 }
@@ -150,6 +153,8 @@ const BROKEN = process.env.JEV_BROKEN === 'on'
 // rating is cut by up to ECHO_JUDGE_WEIGHT of that (on top of the strict all-words echo rule).
 const ECHO_JUDGE = process.env.JEV_ECHO_JUDGE === 'on'
 const ECHO_JUDGE_WEIGHT = 0.6
+const FUNNY = process.env.JEV_FUNNY === 'on'
+const FUNNY_FLOOR = 0.4
 // A fragment like "you're" or "i am not" is marked down by how sure Jev is that it's cut off
 // (JEV_COMPLETE=off skips the question): it won "good effort, JT" over "you are excellent".
 const COMPLETE = process.env.JEV_COMPLETE !== 'off'
