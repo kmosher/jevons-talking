@@ -752,7 +752,7 @@ const PICKS_WARNING = 10
 // this off). Common words ("is", "the", "you") are exempt. At 0.3, replies echoed less, rated a
 // little higher and took fewer calls, since fewer drafts ended in the beam.
 export const ECHO_WEIGHT = Number(process.env.JEV_ECHO_WEIGHT ?? 0.3)
-const COMMON_WORDS = new Set([...unigram].sort((x, y) => y[1] - x[1]).slice(0, 150).map(([w]) => w))
+export const COMMON_WORDS = new Set([...unigram].sort((x, y) => y[1] - x[1]).slice(0, 150).map(([w]) => w))
 const questionWords = (question: string) => new Set((question.toLowerCase().match(/[a-z][a-z0-9']*/g) ?? []).filter((w) => !COMMON_WORDS.has(w) && !['i', 'you', 'your', "you're"].includes(w)))
 // When the message asks for something new ("be specific", "you already said that"), each word
 // pair from JT's own earlier replies in the thread is taken off the menu, so it can't type the

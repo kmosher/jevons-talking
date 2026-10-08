@@ -133,7 +133,6 @@ export function renderSvg(t: Talk, { full = false } = {}): string {
       ...(d.contextWords?.some((w) => w.p >= 0.5) ? [`new words: ${d.contextWords.filter((w) => w.p >= 0.5).map((w) => w.word).join(', ')}`] : []),
       ...(d.contextTotal ? [`context: kept ${d.contextKept} of ${d.contextTotal} posts`] : []),
       ...d.images.map((img) => `saw: "${clip(img, full ? 200 : 60)}"`),
-      ...((t as Partial<HybridTalk>).rewrite?.kept === 'after' ? [`rewrote: ${(t as HybridTalk).rewrite!.edits.map((e) => `${e.from} → ${e.to || '∅'}`).join(', ')}`] : []),
       ...(path ? [`path: ${path === 'beam' ? `beam → ${Object.keys((t as Partial<HybridTalk>).judged ?? {}).length} drafts` : 'single draft'}`] : []),
     ]
     parts.push(`<text x="${PAD}" y="${y - 2}" font-family="${SANS}" font-size="14" fill="${C.ink}">${esc(bits.join('  ·  '))}</text>`)
@@ -155,15 +154,27 @@ export function renderSvg(t: Talk, { full = false } = {}): string {
   }
   // When there was more than one candidate: each, and how Jev rated it as a final answer.
   const judged = (t as Partial<BeamTalk>).judged
-  if (judged && Object.keys(judged).length > 1) {
+  // A kept rewrite gets its own row under the draft it rewrote, and the ✓ moves to it.
+  const rw = (t as Partial<HybridTalk>).rewrite
+  const rewritten = rw?.kept === 'after' ? rw : undefined
+  if (judged && (Object.keys(judged).length > 1 || rewritten)) {
     parts.push(`<text x="${PAD}" y="${y + 4}" font-family="${SANS}" font-size="12" font-weight="700" fill="${C.muted}" letter-spacing="1">DRAFTS · RATED AS A FINAL ANSWER</text>`)
     y += 26
     for (const [draft, p] of Object.entries(judged).sort((a, b) => b[1] - a[1])) {
       const won = isChosen(t, draft)
       parts.push(`<rect x="${PAD}" y="${y - 10}" width="120" height="12" rx="3" fill="${C.chip}"/>`)
       parts.push(`<rect x="${PAD}" y="${y - 10}" width="${Math.max(3, 120 * p)}" height="12" rx="3" fill="${won ? C.orange : C.muted}"/>`)
-      parts.push(`<text x="${PAD + 130}" y="${y + 1}" font-family="${SANS}" font-size="14" font-weight="${won ? 700 : 400}" fill="${C.ink}">${Math.round(p * 100)}%  ${esc(clip(draft, 90))}${won ? '  ✓' : ''}</text>`)
+      parts.push(`<text x="${PAD + 130}" y="${y + 1}" font-family="${SANS}" font-size="14" font-weight="${won && !rewritten ? 700 : 400}" fill="${C.ink}">${Math.round(p * 100)}%  ${esc(clip(draft, 90))}${won && !rewritten ? '  ✓' : ''}</text>`)
       y += 22
+      if (won && rewritten) {
+        const q = rewritten.ratings[1]
+        const swaps = rewritten.edits.map((e) => `${e.from} → ${e.to || '(deleted)'}`).join(', ')
+        parts.push(`<text x="${PAD + 4}" y="${y + 1}" font-family="${SANS}" font-size="14" fill="${C.muted}">↳</text>`)
+        parts.push(`<rect x="${PAD + 20}" y="${y - 10}" width="100" height="12" rx="3" fill="${C.chip}"/>`)
+        parts.push(`<rect x="${PAD + 20}" y="${y - 10}" width="${Math.max(3, 100 * q)}" height="12" rx="3" fill="${C.orange}"/>`)
+        parts.push(`<text x="${PAD + 130}" y="${y + 1}" font-family="${SANS}" font-size="14" font-weight="700" fill="${C.ink}">${Math.round(q * 100)}%  ${esc(clip(rewritten.after, 90))}  ✓<tspan dx="18" font-weight="400" fill="${C.muted}">rewrite: ${esc(swaps)}</tspan></text>`)
+        y += 22
+      }
     }
     y += 14
   }

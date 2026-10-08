@@ -122,15 +122,17 @@ function mobyPath(): string {
 }
 const moby = new SortedFile(mobyPath, ',')
 const mobyList = (w: string) => moby.find(w)?.slice(w.length + 1).split(',') ?? []
-function mobyFor(w: string): string[] {
+function mobyFor(w: string, strict: boolean): string[] {
   if (process.env.JEV_MOBY === 'off') return []
   const syns = mobyList(w)
   const mutual = syns.slice(0, 60).filter((x) => mobyList(x).includes(w))
-  return [...mutual, ...syns.filter((x) => !mutual.includes(x))]
+  return strict ? mutual : [...mutual, ...syns.filter((x) => !mutual.includes(x))]
 }
 
-// Single-word alternatives for `word`, synonyms first; at most `n`.
-export function thesaurus(word: string, n = 40): string[] {
+// Single-word alternatives for `word`, synonyms first; at most `n`. With strict, only near
+// synonyms: the word's own WordNet sets and Moby entries that list it back, without broader
+// terms or Moby's long one-way lists (which gave "horse" sedatives and an A-Z of animals).
+export function thesaurus(word: string, n = 40, strict = false): string[] {
   // Numbers and codes ("87F") have no synonyms; stripping their digits found "f" = fluorine.
   if (/\d/.test(word)) return []
   const w = word.toLowerCase().replace(/[^a-z'-]/g, '')
@@ -143,9 +145,9 @@ export function thesaurus(word: string, n = 40): string[] {
       const s = synset(pos, off)
       near.push(...s.words)
       for (const p of s.pointers)
-        if (p.sym === '&' || p.sym === '@') (p.sym === '&' ? near : broader).push(...synset(POS_OF[p.pos], p.offset).words)
+        if (p.sym === '&' || (p.sym === '@' && !strict)) (p.sym === '&' ? near : broader).push(...synset(POS_OF[p.pos], p.offset).words)
     }
-  const mobySyns = lemmas(w).flatMap(mobyFor)
+  const mobySyns = lemmas(w).flatMap((x) => mobyFor(x, strict))
   // Interleave WordNet's near synonyms with Moby's, then the broader terms.
   const mixed = Array.from({ length: Math.max(near.length, mobySyns.length) }, (_, i) => [near[i], mobySyns[i]]).flat().filter(Boolean) as string[]
   return [...new Set([...mixed, ...broader].map((x) => x.toLowerCase()).filter((x) => /^[a-z'-]+$/.test(x) && x !== w))].slice(0, n)

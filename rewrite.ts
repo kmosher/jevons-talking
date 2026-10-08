@@ -12,6 +12,11 @@ const CANDIDATES = 40
 
 export type Rewrite = { wants: { word: string; p: number }[]; edits: { from: string; to: string; confidence: number }[]; before: string; after: string; ratings: [number, number]; kept: 'before' | 'after'; calls: number }
 
+// Words whose replacement is whatever fits the slot, not a synonym. (WordNet's most frequent
+// words won't do: they include nouns like "person" and "water".)
+const FUNCTION_WORDS = new Set(
+  "a an the this that these those it its i me my you your he she him her his we us our they them their is am are was were be been being do does did have has had will would can could should may might must not no yes and or but so if then than as of to in on at by for with from about into over up down out just very really too also some any all more most much many such what which who how why when where there here".split(' '),
+)
 const KEEP = '(keep it)'
 const DROP = '(delete it)'
 
@@ -34,7 +39,11 @@ export async function rewrite(question: string, answer: string, opts: { conversa
   for (const t of targets) {
     const prev = t.i > 0 ? next[t.i - 1].toLowerCase().replace(/[^a-z0-9']+$/, '') : '<s>'
     const nextWord = next[t.i + 1]?.toLowerCase().replace(/[^a-z0-9']+$/, '')
-    const pool = [...new Set([...forms(t.word), ...thesaurus(t.word, CANDIDATES), ...fillers(prev, nextWord, CANDIDATES), ...predict(prev, '', 20, 10), ...extraWords])].filter((w) => w !== t.word.toLowerCase())
+    // A content word is only offered its own forms and near synonyms; the keyboard's predictions
+    // and fillers (any word that fits the slot) are for function words, so "a horse" can't become
+    // "a man" just because "a man" is a common pair (JEV_REWRITE_POOL=wide restores the old pool).
+    const loose = process.env.JEV_REWRITE_POOL === 'wide' || FUNCTION_WORDS.has(t.word.toLowerCase())
+    const pool = [...new Set([...forms(t.word), ...thesaurus(t.word, CANDIDATES, process.env.JEV_REWRITE_POOL !== 'wide'), ...(loose ? [...fillers(prev, nextWord, CANDIDATES), ...predict(prev, '', 20, 10)] : []), ...extraWords])].filter((w) => w !== t.word.toLowerCase())
     const options = Object.fromEntries([...(process.env.JEV_REWRITE_KEEP === "on" ? [[KEEP, `keep "${t.word}"`]] : []), [DROP, `delete "${t.word}"`], ...pool.map((w) => [`word: ${w}`, `replace "${t.word}" with "${w}"`])])
     const marked = next.map((w, i) => (i === t.i ? `[${w}]` : w)).join(' ')
     const c = await jev().systemOne({ state: { ...state, your_reply: marked }, questions: { pick: choice(`Which option do you pick for the bracketed word "${t.word}"?`, options) } })
